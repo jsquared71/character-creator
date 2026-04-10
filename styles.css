@@ -1,0 +1,153 @@
+:root {
+  --bg: #0c111f;
+  --panel: #151d32;
+  --panel-border: #2f3a57;
+  --text: #f4f6ff;
+  --muted: #9dabcf;
+  --accent: #8ad8ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top, #1e2b49, var(--bg) 50%);
+  min-height: 100vh;
+}
+
+header {
+  padding: 1.25rem 1.5rem 0.5rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: clamp(1.2rem, 2vw, 2rem);
+}
+
+header p {
+  margin-top: 0.4rem;
+  color: var(--muted);
+}
+
+main {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1rem;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.controls,
+.summary {
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(175deg, rgba(23, 32, 56, 0.95), rgba(15, 21, 38, 0.95));
+  border-radius: 14px;
+}
+
+.controls {
+  padding: 0.9rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.field-group label {
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+select,
+input[type='range'],
+input[type='color'],
+button {
+  width: 100%;
+}
+
+select,
+input[type='range'],
+button {
+  background: #1f2946;
+  border: 1px solid #3a476d;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+}
+
+input[type='color'] {
+  border: none;
+  background: transparent;
+  inline-size: 50px;
+  block-size: 32px;
+}
+
+.checkbox-row input[type='checkbox'] {
+  inline-size: 20px;
+  block-size: 20px;
+}
+
+button {
+  cursor: pointer;
+  background: linear-gradient(180deg, #2c82b0, #1e527f);
+  border-color: #64b9ee;
+  font-weight: 600;
+}
+
+.viewport {
+  position: relative;
+  min-height: 70vh;
+}
+
+#viewer {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, #11172a, #0b0f1d);
+}
+
+.summary {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  max-width: 360px;
+  padding: 0.85rem;
+  backdrop-filter: blur(5px);
+}
+
+.summary h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+.summary p {
+  margin: 0.15rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 980px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+
+  .viewport {
+    min-height: 58vh;
+  }
+
+  .summary {
+    position: static;
+    margin-top: 0.7rem;
+  }
+}
