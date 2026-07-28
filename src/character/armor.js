@@ -123,6 +123,74 @@ function conform(g, trim = 0) {
   return g;
 }
 
+/**
+ * Angle-limited vertex normals — the middle ground between `facet()` and a
+ * plain `computeVertexNormals()`.
+ *
+ * A face only contributes to a corner it shares with faces lying within
+ * `angleDeg` of itself, so a lofted shell shades as one continuous curved
+ * surface while genuine bevels (a plate rim, the flat face of a tasset strip)
+ * keep their hard edge. Positions are welded on a 0.1 mm lattice first, so a
+ * `closedU` seam column or a sweep's wrap-around joins up automatically.
+ *
+ * This is the fix for the horizontal banding on the torso: the chest is a loft
+ * whose radius profile rises and falls several times between hip and collar, so
+ * with one normal per facet each ring of quads tilted alternately up and down
+ * and swung between the warm key and the cool rim — regular light/dark stripes
+ * that read as a paper bag rather than a breastplate.
+ */
+function creaseNormals(g, angleDeg = 55) {
+  const src = g.index ? g.toNonIndexed() : g;
+  const pos = src.attributes.position.array;
+  const faces = Math.floor(pos.length / 9);
+  const fx = new Float32Array(faces), fy = new Float32Array(faces), fz = new Float32Array(faces);
+  const wgt = new Float32Array(faces);           // 2x triangle area
+  for (let f = 0; f < faces; f++) {
+    const o = f * 9;
+    const ax = pos[o + 3] - pos[o], ay = pos[o + 4] - pos[o + 1], az = pos[o + 5] - pos[o + 2];
+    const bx = pos[o + 6] - pos[o], by = pos[o + 7] - pos[o + 1], bz = pos[o + 8] - pos[o + 2];
+    const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+    const L = Math.hypot(nx, ny, nz);
+    wgt[f] = L;
+    if (L > 1e-14) { fx[f] = nx / L; fy[f] = ny / L; fz[f] = nz / L; } else { fy[f] = 1; }
+  }
+  const Q = 10000;
+  const keys = new Array(faces * 3);
+  const buckets = new Map();
+  for (let f = 0; f < faces; f++) {
+    for (let c = 0; c < 3; c++) {
+      const o = f * 9 + c * 3;
+      const k = `${Math.round(pos[o] * Q)},${Math.round(pos[o + 1] * Q)},${Math.round(pos[o + 2] * Q)}`;
+      keys[f * 3 + c] = k;
+      let b = buckets.get(k);
+      if (!b) { b = []; buckets.set(k, b); }
+      b.push(f);
+    }
+  }
+  const cosLim = Math.cos(clamp(angleDeg, 0, 180) * Math.PI / 180);
+  const out = new Float32Array(pos.length);
+  for (let f = 0; f < faces; f++) {
+    for (let c = 0; c < 3; c++) {
+      const b = buckets.get(keys[f * 3 + c]);
+      let sx = 0, sy = 0, sz = 0;
+      for (let i = 0; i < b.length; i++) {
+        const h = b[i];
+        if (fx[f] * fx[h] + fy[f] * fy[h] + fz[f] * fz[h] < cosLim) continue;
+        sx += fx[h] * wgt[h]; sy += fy[h] * wgt[h]; sz += fz[h] * wgt[h];
+      }
+      let L = Math.hypot(sx, sy, sz);
+      if (L < 1e-12) { sx = fx[f]; sy = fy[f]; sz = fz[f]; L = 1; }
+      const o = f * 9 + c * 3;
+      out[o] = sx / L; out[o + 1] = sy / L; out[o + 2] = sz / L;
+    }
+  }
+  src.setAttribute('normal', new THREE.Float32BufferAttribute(out, 3));
+  const idx = new Uint32Array(pos.length / 3);
+  for (let i = 0; i < idx.length; i++) idx[i] = i;
+  src.setIndex(new THREE.BufferAttribute(idx, 1));
+  return src;
+}
+
 /** Non-indexed rebuild so shading reads faceted (used for plate / crystal bits). */
 function facet(g) {
   const f = g.index ? g.toNonIndexed() : g;
@@ -158,7 +226,7 @@ function shell(g, thickness) {
  * `x*cos(2*PI*u) + y*sin(2*PI*u)` rising along v): default winding faces out.
  */
 function surface(uSteps, vSteps, fn, opts = {}) {
-  const { closedU = false, trim = null, flip = false, flat = false } = opts;
+  const { closedU = false, trim = null, flip = false, flat = false, crease = 0 } = opts;
   const cols = uSteps + 1, rows = vSteps + 1;
   const pos = [], uv = [], tm = [], idx = [];
   const p = V3();
@@ -192,7 +260,8 @@ function surface(uSteps, vSteps, fn, opts = {}) {
       }
     }
   }
-  return flat ? facet(g) : g;
+  if (flat) return facet(g);
+  return crease > 0 ? creaseNormals(g, crease) : g;
 }
 
 const polyArea = (pts) => {
@@ -212,7 +281,23 @@ const polyArea = (pts) => {
 function framesAlong(points, xHint = V3(1, 0, 0)) {
   const n = points.length;
   const out = [];
-  let x = xHint.clone();
+  let x = xHint.clone().normalize();
+  if (!Number.isFinite(x.lengthSq()) || x.lengthSq() < 0.5) x.set(1, 0, 0);
+  // Seed sanity: if the hint is nearly parallel to the first tangent the
+  // projected residual is a few percent of a unit vector pointing in an
+  // essentially arbitrary direction, and the swept section lands almost
+  // edge-on — the sliver that shows up as a blown-out needle on the Rogue's
+  // chest harness. Swap to a seed that is genuinely transverse instead.
+  if (n > 1) {
+    const t0 = points[Math.min(n - 1, 1)].clone().sub(points[0]);
+    if (t0.lengthSq() > 1e-12) {
+      t0.normalize();
+      if (Math.abs(x.dot(t0)) > 0.9) {
+        x = Math.abs(t0.y) < 0.9 ? V3(0, 1, 0).cross(t0) : V3(1, 0, 0).cross(t0);
+        x.normalize();
+      }
+    }
+  }
   for (let i = 0; i < n; i++) {
     const prev = points[Math.max(0, i - 1)], next = points[Math.min(n - 1, i + 1)];
     const t = next.clone().sub(prev);
@@ -233,7 +318,7 @@ function framesAlong(points, xHint = V3(1, 0, 0)) {
 function sweep(frames, section, opts = {}) {
   const {
     closed = false, capStart = false, capEnd = false,
-    trim = null, scale = null, offset = null, flat = false
+    trim = null, scale = null, offset = null, flat = false, crease = 0
   } = opts;
   const n = frames.length, m = section.length;
   const pos = [], uv = [], tm = [], idx = [];
@@ -294,7 +379,8 @@ function sweep(frames, section, opts = {}) {
   if (capEnd && !closed) cap(n - 1, true);
   const g = rawGeo(pos, uv, tm, idx);
   g.computeVertexNormals();
-  return flat ? facet(g) : g;
+  if (flat) return facet(g);
+  return crease > 0 ? creaseNormals(g, crease) : g;
 }
 
 const ellipse = (n, rx, ry, phase = 0) => {
@@ -481,55 +567,102 @@ function metrics(joints, build, race) {
 }
 
 const TIER_SHAPE = {
-  plate:   { offset: 0.030, bulge: 0.20, collar: 1.00, hem: 0.16, segs: 22, flat: true },
-  mail:    { offset: 0.020, bulge: 0.10, collar: 0.55, hem: 0.10, segs: 24, flat: false },
-  leather: { offset: 0.015, bulge: 0.06, collar: 0.35, hem: 0.06, segs: 22, flat: false },
-  cloth:   { offset: 0.022, bulge: 0.02, collar: 0.70, hem: 0.02, segs: 24, flat: false }
+  plate:   { offset: 0.026, bulge: 0.20, collar: 1.00, hem: 0.16, segs: 28, rows: 18, crease: 64 },
+  mail:    { offset: 0.020, bulge: 0.10, collar: 0.55, hem: 0.10, segs: 28, rows: 18, crease: 72 },
+  leather: { offset: 0.015, bulge: 0.06, collar: 0.35, hem: 0.06, segs: 26, rows: 16, crease: 72 },
+  cloth:   { offset: 0.022, bulge: 0.02, collar: 0.70, hem: 0.02, segs: 28, rows: 18, crease: 78 }
 };
 
-/** Trim mask generators keyed by klass.armor.trim. u = around (0 = front), v = up. */
+// ---------------------------------------------------------------------------
+// trim mask
+// ---------------------------------------------------------------------------
+
+/*
+ * `aTrimMask` is a POINT SAMPLE, taken at the vertices of a coarse grid: the
+ * chest is 28 columns around by 18 rows up, a swept strap is 8 samples around
+ * its section. Anything finer than roughly two grid cells therefore does not
+ * survive sampling — it aliases.
+ *
+ * The old generators ignored that. `riveted` was |sin(u*16*PI)|^22, i.e. 16
+ * lobes read at 23 columns; 8u mod 11 walks the residues, so exactly four
+ * columns landed within a hair of a lobe peak and every one of them evaluated
+ * to 0.718 while their neighbours evaluated to 0. Those four columns were not
+ * rivets, they were the alias, and because they were *constant down every row*
+ * they painted four full-height stripes of inlay whose interpolation smeared
+ * across a whole quad. `stitched` (26 lobes, ^30) and `leather` (20 lobes, ^26)
+ * were worse still.
+ *
+ * Fine repeated detail — rivet heads, stitch dashes, studs — belongs in the
+ * material's UV-space bakes, which run at 512x512 and already carry it. What
+ * this attribute can honestly describe is BROAD regions, so that is all it does
+ * now: hems, cuffs, a collar band, a waist line and at most SEAMS panel
+ * divisions. Every feature below is at least two grid cells wide in u and in v,
+ * and the seam positions are k/SEAMS, which lands on a vertex column for every
+ * `segs` in TIER_SHAPE (they are all multiples of SEAMS).
+ */
+const TRIM_SEAMS = 4;
+
+/** Fade in from an edge at v = 0, `w` wide. */
+const edgeTo = (v, w) => 1 - smooth(clamp01(v / w));
+/** Smooth band of half-width `w` centred on `c` in a non-wrapping coordinate. */
+const bandV = (v, c, w) => 1 - smooth(clamp01(Math.abs(v - c) / w));
+/** Same, but in the wrapped `u` coordinate. */
+const bandU = (u, c, w) => {
+  const d = Math.abs((((u - c) % 1) + 1.5) % 1 - 0.5);
+  return 1 - smooth(clamp01(d / w));
+};
+/** `n` evenly spaced vertical seams, one of them on the centre front (u = 0). */
+const seamsU = (u, n, w) => {
+  const d = Math.abs((((u * n) % 1) + 1.5) % 1 - 0.5) / n;
+  return 1 - smooth(clamp01(d / w));
+};
+
+/**
+ * Trim mask generators keyed by klass.armor.trim. u = around (0 = front), v = up.
+ * Broad regions only — see the note above.
+ */
 function trimFor(style) {
-  const edge = (v, w) => 1 - smooth(clamp01(v / w));
+  const SW = 0.055;                 // seam half-width: ~1.5 cells at segs 28
   switch (style) {
     case 'gilt':
       return (u, v) => Math.max(
-        edge(v, 0.10), edge(1 - v, 0.09),
-        (1 - smooth(Math.abs(((u + 0.5) % 1) - 0.5) / 0.045)) * 0.9,
-        (1 - smooth(Math.abs(v - 0.55) / 0.035)) * 0.7
+        edgeTo(v, 0.10), edgeTo(1 - v, 0.09),
+        bandU(u, 0.5, 0.055) * 0.95,
+        bandV(v, 0.55, 0.055) * 0.85
       );
     case 'riveted':
       return (u, v) => Math.max(
-        edge(v, 0.09), edge(1 - v, 0.11),
-        (1 - smooth(Math.abs(v - 0.62) / 0.04)) * 0.85,
-        Math.pow(Math.abs(Math.sin(u * 16 * Math.PI)), 22) * 0.9
+        edgeTo(v, 0.10), edgeTo(1 - v, 0.11),
+        bandV(v, 0.62, 0.070) * 0.95,
+        seamsU(u, TRIM_SEAMS, SW) * bandV(v, 0.5, 0.62) * 0.9
       );
     case 'runic':
       return (u, v) => Math.max(
-        edge(v, 0.07) * 0.8, edge(1 - v, 0.08) * 0.8,
-        gauss(((u * 7) % 1) - 0.5, 0.09) * gauss(v - 0.5, 0.22) * 1.1,
-        (1 - smooth(Math.abs(((u + 0.5) % 1) - 0.5) / 0.03))
+        edgeTo(v, 0.08) * 0.85, edgeTo(1 - v, 0.09) * 0.85,
+        bandU(u, 0.5, 0.06),
+        seamsU(u, TRIM_SEAMS, 0.05) * gauss(v - 0.5, 0.24) * 1.15
       );
     case 'embroidered':
       return (u, v) => Math.max(
-        edge(v, 0.13), edge(1 - v, 0.10),
-        (1 - smooth(Math.abs(((u + 0.5) % 1) - 0.5) / 0.06)) * 0.85,
-        Math.pow(Math.max(0, Math.sin(u * 12 * Math.PI)), 8) * (1 - smooth(Math.abs(v - 0.25) / 0.05)) * 0.8
+        edgeTo(v, 0.13), edgeTo(1 - v, 0.10),
+        bandU(u, 0.5, 0.07) * 0.95,
+        seamsU(u, TRIM_SEAMS, 0.05) * bandV(v, 0.28, 0.10) * 0.9
       );
     case 'bone':
       return (u, v) => Math.max(
-        edge(v, 0.06) * 0.9,
-        Math.pow(Math.abs(Math.sin(u * 9 * Math.PI)), 14) * (1 - smooth(Math.abs(v - 0.72) / 0.10))
+        edgeTo(v, 0.07) * 0.95,
+        seamsU(u, TRIM_SEAMS, 0.05) * bandV(v, 0.72, 0.13)
       );
     case 'leather':
       return (u, v) => Math.max(
-        edge(v, 0.07) * 0.75, edge(1 - v, 0.06) * 0.6,
-        Math.pow(Math.abs(Math.sin(u * 20 * Math.PI)), 26) * 0.7
+        edgeTo(v, 0.08) * 0.85, edgeTo(1 - v, 0.07) * 0.7,
+        seamsU(u, TRIM_SEAMS, 0.045) * bandV(v, 0.5, 0.55) * 0.8
       );
     case 'stitched':
     default:
       return (u, v) => Math.max(
-        edge(v, 0.05) * 0.6, edge(1 - v, 0.05) * 0.6,
-        Math.pow(Math.abs(Math.sin(u * 26 * Math.PI)), 30) * 0.55 * (1 - smooth(Math.abs(v - 0.5) / 0.5))
+        edgeTo(v, 0.07) * 0.75, edgeTo(1 - v, 0.07) * 0.75,
+        seamsU(u, TRIM_SEAMS, 0.04) * bandV(v, 0.5, 0.5) * 0.7
       );
   }
 }
@@ -550,8 +683,12 @@ function buildChest(ctx) {
   const isCloth = A.tier === 'cloth';
   const isMail = A.tier === 'mail';
 
+  // Density is set by what the trim mask and the shading have to resolve, not
+  // by the silhouette: 28x18 is still only ~1000 triangles out of a 25k budget,
+  // and it gives the creased normals enough rings that the pectoral and spine
+  // swells read as curvature rather than as a fold.
   const segs = T.segs;
-  const rows = 14;
+  const rows = T.rows;
   const rowFrames = [];
   for (let j = 0; j <= rows; j++) rowFrames.push(M.frameAt(lerp(vLow, vHigh, j / rows)));
 
@@ -585,7 +722,7 @@ function buildChest(ctx) {
       f.p.y + f.right.y * w * cs + f.fwd.y * (d * ss - humpZ) + humpZ * 0.45,
       f.p.z + f.right.z * w * cs + f.fwd.z * (d * ss - humpZ)
     );
-  }, { closedU: true, flat: T.flat, trim: (uu, vv) => trimFn(uu, vv) });
+  }, { closedU: true, crease: T.crease, trim: (uu, vv) => trimFn(uu, vv) });
   part.add(shellGeo);
 
   // collar / gorget
@@ -616,7 +753,7 @@ function buildChest(ctx) {
         f.p.y + f.x.y * r * Math.cos(th) + f.y.y * r * aspTop * Math.sin(th),
         f.p.z + f.x.z * r * Math.cos(th) + f.y.z * r * aspTop * Math.sin(th)
       );
-    }, { closedU: true, flat: T.flat, trim: (uu, vv) => Math.max(0.25, smooth(vv * 1.4)) });
+    }, { closedU: true, crease: Math.min(T.crease, 52), trim: (uu, vv) => Math.max(0.25, smooth(vv * 1.4)) });
     part.add(collar);
   }
 
@@ -624,6 +761,7 @@ function buildChest(ctx) {
   if (A.tier === 'leather' || isMail) {
     for (const s of [1, -1]) {
       const pts = [];
+      let hint = null;
       for (let i = 0; i <= 6; i++) {
         const t = i / 6;
         const ts = lerp(0.86, 0.22, t);
@@ -636,9 +774,21 @@ function buildChest(ctx) {
           f.p.y + f.right.y * w * Math.cos(th) + f.fwd.y * d * Math.sin(th),
           f.p.z + f.right.z * w * Math.cos(th) + f.fwd.z * d * Math.sin(th)
         ));
+        // The strap's WIDE axis has to lie along the chest, not stick out of
+        // it. Seeding the transport with (0,1,0) — which is all but parallel to
+        // a strap running down the torso — left the seed direction to fall out
+        // of floating-point noise, and the 5.5 cm band came out standing on
+        // edge: a one-pixel sliver that the anisotropic glint lit up as a
+        // glowing needle across the Rogue's chest. Seed it with the surface
+        // tangent instead.
+        if (i === 0) {
+          hint = f.right.clone().multiplyScalar(-Math.sin(th))
+            .addScaledVector(f.fwd, Math.cos(th)).normalize();
+        }
       }
-      const strap = sweep(framesAlong(pts, V3(0, 1, 0)), roundRect(0.055 * u, 0.014 * u, 0.005 * u), {
-        capStart: true, capEnd: true, trim: () => 0.35, scale: (t) => [lerp(1, 0.8, t), 1]
+      const strap = sweep(framesAlong(pts, hint || V3(1, 0, 0)), roundRect(0.055 * u, 0.014 * u, 0.005 * u), {
+        capStart: true, capEnd: true, trim: () => 0.35, scale: (t) => [lerp(1, 0.8, t), 1],
+        crease: 34
       });
       part.add(strap);
     }
@@ -689,11 +839,14 @@ function buildBelt(ctx) {
 
   // buckle at the front
   const buckleP = f.p.clone().addScaledVector(f.fwd, rd + thick * 0.8);
-  const bw = M.hipR * 0.55, bh = h * 1.5;
+  // A buckle is jewellery on a belt, not a second belt: the prong used to be
+  // 1.35 * 1.5 * the band height — an 18 cm mirror-metal slab standing on end,
+  // which the bloom pass duly clipped to a white bar down the character's front.
+  const bw = M.hipR * 0.55, bh = h * 1.15;
   if (A.tier === 'plate' || A.tier === 'mail') {
     const g = new THREE.CylinderGeometry(bw * 0.55, bw * 0.55, thick * 1.6, 8, 1);
     part.add(facet(g), trs(buckleP, new THREE.Euler(Math.PI * 0.5, 0, 0), V3(1, 1, 1)), 1.0);
-    const g2 = new THREE.BoxGeometry(bw * 0.18, bh * 1.35, thick * 2.2);
+    const g2 = new THREE.BoxGeometry(bw * 0.16, bh, thick * 1.8);
     part.add(g2, place(buckleP.x, buckleP.y, buckleP.z), 1.0);
   } else {
     const g = new THREE.BoxGeometry(bw, bh, thick * 1.4);
@@ -733,18 +886,25 @@ function skirtTasset(ctx) {
   const part = new Part('tasset');
   const u = M.u;
   const f = hipFrame(M);
-  const rw = f.rw * 1.04 + 0.030 * u;
-  const rd = f.rd * 1.04 + 0.026 * u;
-  const drop = M.H * (A.pauldron === 'skulled' ? 0.20 : 0.17);
+  // The skirt used to read as a barrel because three things stacked up: a 3 cm
+  // stand-off at the belt, ten strips cut 18% wider than the circumference they
+  // hang from, and a splay that pushed the hem 5 cm further out again — so the
+  // hem ended up 8 cm proud of a thigh that is itself only 6 cm across. The
+  // stand-off, the overlap and the splay are all pulled back, and the strips
+  // now taper as they fall.
+  const rw = f.rw * 1.03 + 0.017 * u;
+  const rd = f.rd * 1.03 + 0.015 * u;
+  const drop = M.H * (A.pauldron === 'skulled' ? 0.20 : 0.175);
   const count = 10;
-  const trimFn = trimFor(A.trim);
 
   for (let i = 0; i < count; i++) {
     const th = TAU * (i + 0.5) / count + Math.PI * 0.5;
     const ct = Math.cos(th), st = Math.sin(th);
-    // leave the inner thigh gap open
-    const gap = Math.abs(ct);
-    if (gap > 0.93 && Math.abs(st) < 0.36) continue;
+    // `dir` is built as right*ct + fwd*st, so |ct| ~ 1 is the OUTSIDE of the
+    // hip, not the inner thigh the old guard's comment claimed. Skipping those
+    // two strips left the hips bare on exactly the silhouette the hero view
+    // reads, so the ring is closed now; stride clearance comes from the taper
+    // and the shorter drop instead.
     const dir = f.right.clone().multiplyScalar(ct).addScaledVector(f.fwd, st).normalize();
     const top = f.p.clone().addScaledVector(f.right, rw * ct).addScaledVector(f.fwd, rd * st);
     const len = drop * (0.82 + 0.30 * Math.max(0, st) + 0.10 * rand());
@@ -754,13 +914,16 @@ function skirtTasset(ctx) {
       const t = k / segs;
       pts.push(top.clone()
         .addScaledVector(f.up, -len * t)
-        .addScaledVector(dir, len * 0.20 * t * t + 0.004 * u));
+        .addScaledVector(dir, len * 0.09 * t * t + 0.004 * u));
     }
-    const w = (TAU * rw / count) * 1.18;
-    const strip = sweep(framesAlong(pts, dir), roundRect(w, 0.026 * u, 0.008 * u), {
+    const w = (TAU * rw / count) * 1.14;
+    const strip = sweep(framesAlong(pts, dir), roundRect(w, 0.024 * u, 0.008 * u), {
       capStart: true, capEnd: true,
-      scale: (t) => [lerp(1, 0.80, t * t), 1],
-      trim: (s, t) => Math.max(trimFn(s, 1 - t) * 0.8, 1 - smooth(t / 0.14))
+      scale: (t) => [lerp(1, 0.84, t * t), 1],
+      // hanger band at the top, edge band at the hem; the rivets themselves are
+      // real geometry below and micro-relief in the material's bake
+      trim: (s, t) => Math.max(1 - smooth(t / 0.16), (1 - smooth((1 - t) / 0.12)) * 0.85),
+      crease: 34
     });
     part.add(strip);
     // rivet at the hanger
@@ -779,7 +942,7 @@ function skirtTasset(ctx) {
         f.p.y - drop * 0.30 * vv + 0.02 * u,
         f.p.z + f.right.z * r * Math.cos(th) + f.fwd.z * d * Math.sin(th)
       );
-    }, { closedU: true, flat: true, trim: (uu, vv) => (vv > 0.8 ? 1 : 0.15) });
+    }, { closedU: true, crease: 42, trim: (uu, vv) => (vv > 0.8 ? 1 : 0.15) });
     part.add(shell(cape2, 0.012 * u));
   }
   return part;
@@ -972,30 +1135,42 @@ function buildBracers(ctx) {
   const part = new Part('bracers');
   const u = M.u;
   const T = TIER_SHAPE[A.tier] || TIER_SHAPE.plate;
-  const trimFn = trimFor(A.trim);
 
   for (const h of M.hands) {
     const sh = M.shoulders.find((s) => s.side === h.side) || M.shoulders[0];
-    const dir = h.p.clone().sub(sh.p);
+    // The shoulder JOINT sits inside the deltoid, so a straight line from it to
+    // the hand runs a good 3 cm inboard of the limb the body actually lofted,
+    // and the old bracer had to be inflated to a 16 cm-wide tube just to
+    // swallow that error. Start the arm axis at the outside of the deltoid
+    // instead and the sleeve can hug the forearm.
+    const root = sh.p.clone().addScaledVector(V3(h.side, 0, 0), sh.r * 0.55);
+    const dir = h.p.clone().sub(root);
     const armLen = dir.length() || M.H * 0.4;
     dir.normalize();
     const wrist = h.p.clone().addScaledVector(dir, -h.r * 1.15);
-    const elbow = sh.p.clone().addScaledVector(dir, armLen * 0.52);
+    const elbow = root.clone().addScaledVector(dir, armLen * 0.52);
     const pts = [];
     const segs = 5;
     for (let i = 0; i <= segs; i++) pts.push(elbow.clone().lerp(wrist, i / segs));
-    const rWrist = h.r * 1.06 + T.offset * u * 0.26;
-    const rElbow = h.r * 1.30 * lerp(1, M.armThick, 0.4) + T.offset * u * 0.36;
+    // `h.r` is the HAND radius, which is noticeably fatter than the wrist it
+    // hangs off; taking it as the cuff radius is what made the vambraces read
+    // as drainpipes. Both radii are now fractions of it that land a centimetre
+    // clear of the lofted forearm.
+    const rWrist = h.r * 0.82 + T.offset * u * 0.22;
+    const rElbow = h.r * 1.06 * lerp(1, M.armThick, 0.4) + T.offset * u * 0.30;
 
-    const flareTop = A.tier === 'plate' ? 1.20 : A.tier === 'cloth' ? 1.34 : 1.06;
-    const bracer = sweep(framesAlong(pts, V3(1, 0, 0)), ellipse(10, 1, 0.88), {
+    const flareTop = A.tier === 'plate' ? 1.18 : A.tier === 'cloth' ? 1.28 : 1.08;
+    const bracer = sweep(framesAlong(pts, V3(h.side, 0, 0)), ellipse(12, 1, 0.90), {
       capStart: false, capEnd: false,
       scale: (t) => {
         const r = lerp(rElbow * flareTop, rWrist, smooth(Math.pow(t, 0.8)));
         return [r, r];
       },
-      trim: (s, t) => Math.max(trimFn(s, t), 1 - smooth(t / 0.10), 1 - smooth((1 - t) / 0.09)),
-      flat: T.flat
+      // Banded cuffs at both ends. The generic trim function's `u` means
+      // "around the piece"; here `s` runs around a 12-sided section, which is
+      // not the same coordinate, so feeding it in only invents stripes.
+      trim: (s, t) => Math.max(1 - smooth(t / 0.12), 1 - smooth((1 - t) / 0.10)),
+      crease: T.crease
     });
     part.add(bracer);
 
@@ -1011,10 +1186,13 @@ function buildBracers(ctx) {
         part.add(ring, m, 0.75);
       }
     } else if (A.tier === 'plate') {
-      // elbow cop
-      const cop = new THREE.SphereGeometry(rElbow * 1.25, 8, 6, 0, TAU, 0, Math.PI * 0.55);
+      // Elbow cop. Same rule as the poleyn: the dome's rim has to sit *inside*
+      // the vambrace and its crown *outside*, or the silhouette is a flat slab
+      // cantilevered off the arm. Its axis (local +y) is the outboard
+      // direction, so that is the axis that has to be the long one.
+      const cop = new THREE.SphereGeometry(rElbow * 0.98, 8, 6, 0, TAU, 0, Math.PI * 0.54);
       const q = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), V3(h.side, 0.15, -0.1).normalize());
-      const m = mat().compose(elbow.clone().addScaledVector(dir, rElbow * 0.2), q, V3(1, 0.8, 1.15));
+      const m = mat().compose(elbow.clone().addScaledVector(dir, rElbow * 0.20), q, V3(0.95, 1.42, 1.05));
       part.add(facet(cop), m, 0.35);
     }
   }
@@ -1030,7 +1208,6 @@ function buildBoots(ctx) {
   const part = new Part('boots');
   const u = M.u;
   const T = TIER_SHAPE[A.tier] || TIER_SHAPE.plate;
-  const trimFn = trimFor(A.trim);
   const hoof = M.digitigrade && (M.race === 'Tauren' || M.race === 'Draenei');
 
   for (const f of M.feet) {
@@ -1038,8 +1215,17 @@ function buildBoots(ctx) {
     const footLen = M.H * 0.135 * (0.85 + 0.20 * M.legThick);
     // half-width of the boot; every radius below is a true radius. body.js
     // reports a foot radius — prefer it, since it already knows about hooves.
-    const footW = (f.r > 0 ? f.r * 1.06 : M.H * 0.027 * lerp(1, M.legThick, 0.6)) + T.offset * u * 0.30;
-    const ankleH = M.H * 0.050 * (hoof ? 1.15 : 1.0);
+    const legR = f.r > 0 ? f.r : M.H * 0.033 * lerp(1, M.legThick, 0.6);
+    const footW = legR * 1.08 + T.offset * u * 0.28;
+    // Ankle and calf are NOT the foot. The greave used to be `footW * 1.34`,
+    // i.e. a 20 cm-wide tube wrapped around a 7 cm shin, which is why the boots
+    // read as two blobs stuck on the ends of the legs. A foot is roughly twice
+    // as wide as the ankle it stands on and half again as wide as the calf, so
+    // the shaft radii below are fractions of the reported foot half-width and
+    // the greave sits ~1.5 cm proud of the leg instead of 5 cm.
+    const ankleR = legR * (hoof ? 1.06 : 0.66);
+    const calfR = legR * (hoof ? 1.18 : 0.95);
+    const ankleH = M.H * 0.042 * (hoof ? 1.15 : 1.0);
     const shaftTop = soleY + M.H * (A.tier === 'cloth' ? 0.075 : hoof ? 0.10 : 0.16) * (0.85 + 0.3 * M.legThick);
 
     if (!hoof) {
@@ -1057,8 +1243,11 @@ function buildBoots(ctx) {
           return [w, hgt];
         },
         offset: (t) => [0, ankleH * profile(t, [[0, 1.25], [0.35, 0.95], [0.75, 0.72], [1, 0.48]]) * 0.5],
-        trim: (s, t) => Math.max(trimFn(s, t) * 0.7, (t > 0.86 ? 0.8 : 0) * (A.tier === 'plate' ? 1 : 0.4)),
-        flat: T.flat
+        // toe cap only — the sabaton's own edges are real geometry, not mask
+        trim: (s, t) => (1 - smooth((1 - t) / 0.14)) * (A.tier === 'plate' ? 0.95 : 0.4),
+        // low crease angle: the sole and the two side panels have to stay flat
+        // and meet at a hard edge, or a rounded-rect sweep shades as a lozenge
+        crease: 34
       });
       part.add(foot);
     }
@@ -1071,25 +1260,27 @@ function buildBoots(ctx) {
       const t = i / sSteps;
       pts.push(V3(f.p.x, lerp(ankleY, shaftTop, t), f.p.z + (hoof ? 0.01 * u : -footLen * 0.06 * t)));
     }
-    const rBase = footW * (hoof ? 1.10 : 0.92);
-    const rTop = footW * (A.tier === 'plate' ? 1.34 : A.tier === 'cloth' ? 1.48 : 1.14);
-    const shaft = sweep(framesAlong(pts, V3(1, 0, 0)), ellipse(12, 1, 1.06), {
+    const rBase = ankleR;
+    const rTop = calfR * (A.tier === 'plate' ? 1.22 : A.tier === 'cloth' ? 1.38 : 1.10);
+    const shaft = sweep(framesAlong(pts, V3(1, 0, 0)), ellipse(14, 1, 1.06), {
       capStart: false, capEnd: false,
       scale: (t) => {
         const r = lerp(rBase, rTop, smooth(Math.pow(t, 0.75)));
         return [r, r];
       },
-      trim: (s, t) => Math.max(trimFn(s, t), 1 - smooth((1 - t) / 0.13)),
-      flat: T.flat
+      trim: (s, t) => Math.max(1 - smooth((1 - t) / 0.14), (1 - smooth(t / 0.10)) * 0.7),
+      crease: T.crease
     });
     part.add(shaft);
 
     if (A.tier === 'plate') {
-      // poleyn capping the greave; kept clear of the ground on short hoof boots
-      const cop = new THREE.SphereGeometry(rTop * 0.98, 8, 6, 0, TAU, 0, Math.PI * 0.6);
+      // poleyn capping the greave. Rim tucked inside the shaft, crown standing
+      // proud of it — a dome wider than the tube it sits on reads as a paddle
+      // bolted to the side of the leg, not as a knee cop.
+      const cop = new THREE.SphereGeometry(rTop * 0.88, 8, 6, 0, TAU, 0, Math.PI * 0.58);
       const q = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), V3(0, 0.35, 1).normalize());
-      const cy = Math.max(shaftTop - rTop * 0.10, soleY + rTop * 1.05);
-      part.add(facet(cop), mat().compose(V3(f.p.x, cy, f.p.z + rTop * 0.30), q, V3(1, 1.1, 0.9)), 0.5);
+      const cy = Math.max(shaftTop - rTop * 0.20, soleY + rTop * 1.05);
+      part.add(facet(cop), mat().compose(V3(f.p.x, cy, f.p.z + rTop * 0.22), q, V3(1, 1.15, 0.9)), 0.5);
     } else if (A.tier === 'leather' || A.tier === 'mail') {
       for (let k = 0; k < 2; k++) {
         const y = lerp(ankleY, shaftTop, 0.35 + k * 0.42);

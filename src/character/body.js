@@ -329,6 +329,48 @@ function tube(mb, keys, radiusProfile, opts = {}) {
   });
 }
 
+/**
+ * Loft a limb through `keys` with every profile evaluated at *normalised arc
+ * length* instead of at the curve parameter.
+ *
+ * This matters because muscle is quoted anatomically — "the calf belly peaks a
+ * third of the way down the shin", "the elbow is the narrowest point of the
+ * arm". A Catmull-Rom's own parameter is nowhere near uniform once the control
+ * points are unevenly spaced (and a deltoid control point one tenth the length
+ * of the humerus makes them very unevenly spaced), so evaluating a profile
+ * against `i / segments` slides every bulge off the bone it belongs to. `tube`
+ * above still does exactly that, which is why the first pass had no biceps,
+ * no elbow and no calf however many keys the profile had.
+ */
+function limb(mb, keys, opts) {
+  const segs = opts.segments || 22;
+  const path = samplePath(keys, segs);
+  const acc = [0];
+  for (let i = 1; i < segs; i++) acc.push(acc[i - 1] + path[i].distanceTo(path[i - 1]));
+  const total = acc[segs - 1] || 1;
+  const rings = path.map((_, i) => {
+    const t = acc[i] / total;
+    return {
+      r: profile(opts.radius, t),
+      aspect: opts.aspect ? profile(opts.aspect, t) : 1,
+      front: opts.front ? profile(opts.front, t) : 1,
+      back: opts.back ? profile(opts.back, t) : 1,
+      n: opts.n ? profile(opts.n, t) : 2,
+      w: opts.weight ? profile(opts.weight, t) : (opts.w === undefined ? 0.3 : opts.w)
+    };
+  });
+  return loftTube(mb, {
+    path,
+    rings,
+    radial: opts.radial || 18,
+    upHint: opts.upHint || V3(0, 0, 1),
+    capStart: opts.capStart || 'none',
+    capEnd: opts.capEnd || 'none',
+    deform: opts.deform,
+    vRange: opts.vRange
+  });
+}
+
 /** A small four-sided plate — dorsal scutes for scaled races. */
 function addScute(mb, base, dir, sideAxis, size, w = 0.0) {
   const d = dir.clone().normalize();
@@ -1171,6 +1213,24 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const headR = (H / 16) * B.headScale;         // canonical-8-heads radius
   const hipY = H * B.legLength;                 // hip joint height
   const gaunt = sat((0.92 - B.armThick) / 0.28); // Undead-ness: knobby, hollow
+  // How much muscle relief the limbs get. A gaunt race keeps the joints (which
+  // are bone) and loses the bellies (which are not), so the Undead reads as
+  // knobby rather than as a shrunken Orc.
+  const musc = clamp(1 - 0.95 * gaunt, 0.05, 1);
+
+  // --- pose: contrapposto ----------------------------------------------------
+  // A hero-select figure standing with its feet parallel and its arms straight
+  // down is a mannequin no matter how good the anatomy is. `wt` is the side the
+  // weight is on: that hip rides high, that shoulder drops, the pelvis slides
+  // over the loaded leg and the free leg relaxes out, back and slightly bent.
+  // Everything is quoted in `unit` so it scales with the build rather than being
+  // a fixed number of centimetres on a Gnome.
+  const wt = 1;
+  const pose = 1 - 0.30 * sat(B.posture / 0.34);   // heavy hunchers stand squarer
+  const pelvisX = unit * 0.16 * pose * wt;
+  const hipRise = unit * 0.14 * pose;              // + on the loaded side
+  const shoulderDrop = unit * 0.19 * pose;         // - on the loaded side
+  const shoulderTwist = unit * 0.14 * pose;        // loaded shoulder eases back
 
   // --- torso / neck skeleton -------------------------------------------------
   const neckLen = Math.max(headR * 0.16, headR * 0.95 * B.neck);
@@ -1205,17 +1265,29 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const pelvisZ = -leanZ * 0.34;
   for (const p of spinePts) p.z += pelvisZ;
 
+  // Lateral S. The pelvis rides over the loaded leg and the thorax counters
+  // back across the midline — the line that makes a standing figure read as
+  // resting rather than as balanced on both feet.
+  for (let i = 0; i <= SPINE_SEGS; i++) {
+    const t = i / SPINE_SEGS;
+    spinePts[i].x +=
+      pelvisX * (1 - smoothstep(0.02, 0.72, t)) - pelvisX * 0.62 * smoothstep(0.28, 1.0, t);
+  }
+
   // Neck continues the curve but straightens toward vertical.
   const NECK_SEGS = 5;
   const neckPts = [];
   {
     const topA = spineAng[SPINE_SEGS];
     const p = spinePts[SPINE_SEGS].clone();
+    const x0 = p.x;
     const ds = neckLen / NECK_SEGS;
     for (let i = 1; i <= NECK_SEGS; i++) {
-      const a = topA * lerp(1, 0.45, i / NECK_SEGS);
+      const k = i / NECK_SEGS;
+      const a = topA * lerp(1, 0.45, k);
       p.y += Math.cos(a) * ds;
       p.z += Math.sin(a) * ds;
+      p.x = lerp(x0, x0 * 0.25, k);
       neckPts.push(p.clone());
     }
   }
@@ -1286,6 +1358,48 @@ export function buildBodyGeometry(build, features, opts = {}) {
         p.addScaledVector(f.z, -humpAmt * w);
         p.y += humpAmt * 0.45 * w;
       }
+      if (i > SPINE_SEGS) return;
+
+      // Surface relief. The ring radii are the armor module's shared contract
+      // (it rebuilds this exact profile to seat its shell), so the relief is
+      // almost all GROOVE — carving inwards can never poke a plate. What little
+      // pushes outwards is a couple of millimetres of pectoral.
+      const c = Math.cos(th);      // +1 dead ahead, -1 dead behind
+      const s = Math.sin(th);      // lateral, signed
+      const fwd = Math.max(0, c);
+      const ax = Math.abs(s);
+      let d = 0;
+
+      // sternum / linea alba — one continuous midline furrow from the pit of
+      // the throat to the navel, which is what separates two pectorals from one
+      // barrel.
+      d -= 0.130 * gauss(ax, 0.22) * plateau(t, 0.30, 0.80, 0.14) * fwd * fwd;
+      // under-pectoral shadow
+      d -= 0.120 * musc * gauss(t - 0.590, 0.040) * gauss(ax - 0.40, 0.34) * fwd;
+      // pectoral mass
+      d += 0.070 * musc * gauss(t - 0.690, 0.070) * gauss(ax - 0.38, 0.30) * fwd * fwd;
+      // navel and two abdominal creases
+      d -= 0.075 * gauss(t - 0.255, 0.022) * gauss(ax, 0.14) * fwd;
+      d -= 0.085 * musc * gauss(t - 0.400, 0.024) * gauss(ax, 0.40) * fwd;
+      d -= 0.075 * musc * gauss(t - 0.318, 0.024) * gauss(ax, 0.36) * fwd;
+      // iliac crease running down into the groin
+      d -= 0.120 * gauss(t - 0.145, 0.070) * gauss(ax - 0.62, 0.20) * fwd;
+      // clavicles
+      d -= 0.100 * gauss(t - 0.845, 0.028) * gauss(ax - 0.36, 0.32) * fwd;
+      // serratus notches under the armpit
+      d -= 0.070 * musc * gauss(t - 0.545, 0.055) * gauss(ax - 0.86, 0.10) * (0.4 + 0.6 * fwd);
+      // Trapezius: without it the neck column meets the crown of the deltoid in
+      // a step, and a step there reads as a coat hanger rather than a shoulder.
+      d += 0.15 * gauss(t - 0.940, 0.065) * ax * ax * (0.6 + 0.4 * Math.max(0, -c));
+      // scapular grooves either side of the spine
+      d -= 0.100 * musc * gauss(ax - 0.44, 0.15) * plateau(t, 0.62, 0.86, 0.10) *
+           Math.max(0, -c);
+      // the furrow down the spine itself
+      d -= 0.125 * gauss(ax, 0.17) * plateau(t, 0.16, 0.90, 0.12) * Math.max(0, -c);
+
+      // `(s, c)` is the outward radial direction in frame coordinates, so a
+      // negative `d` is inward everywhere on the ring, front and back alike.
+      if (d !== 0) p.addScaledVector(f.x, unit * d * s).addScaledVector(f.z, unit * d * c);
     }
   });
 
@@ -1293,92 +1407,211 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const frameAt = (t) => frames[clamp(Math.round(t * SPINE_SEGS), 0, SPINE_SEGS)];
 
   // --- arms ------------------------------------------------------------------
+  //
+  // The arm is one loft that starts INSIDE the trapezius, swells over the
+  // deltoid, and only then becomes a limb. That first control point is the whole
+  // trick: an arm whose top ring is an open disc floating beside the chest has
+  // no shoulder, and a figure with no shoulder is a doll with the arms pushed
+  // into the sockets — which is exactly what a broad chest with spindly limbs
+  // hanging off it reads as.
   const armLen = H * B.armLength;
-  const armBase = unit * 0.38 * B.armThick;
-  const shoulderF = frameAt(0.90);
-  const armRings = [
-    [0.00, armBase * 1.22], [0.10, armBase * 1.10], [0.22, armBase * 0.95],
-    [0.42, armBase * (0.70 + 0.10 * gaunt)], [0.52, armBase * 0.80],
-    [0.72, armBase * 0.62], [1.00, armBase * 0.46]
-  ];
-  const armWeights = [[0, 0.85], [0.18, 0.35], [0.40, 0.75], [0.6, 0.3], [1, 0.4]];
+  const armBase = unit * 0.415 * B.armThick;
+  // t = 0.84, not the top of the torso: the crown of the deltoid sits BELOW the
+  // trapezius, and hanging it off the topmost ring turns the shoulders into
+  // pauldrons the body is wearing under its skin.
+  const shoulderF = frameAt(0.86);
 
   const joints = { shoulders: [], hands: [], feet: [], eyes: [] };
   const armParts = [];
-  const splay = 0.13 + 0.09 * B.chest;
+  const splay = 0.145 + 0.075 * B.chest;
 
   for (const side of [-1, 1]) {
-    const shoulder = shoulderF.p
+    const loaded = side === wt;
+    const yOff = loaded ? -shoulderDrop : shoulderDrop * 0.55;
+    const zOff = loaded ? -shoulderTwist : shoulderTwist;
+
+    // Buried under the trapezius, then the crown of the deltoid.
+    // Outboard enough that the arm's inner surface meets the torso on its SIDE.
+    // Set any further in and the intersection of the two solids runs diagonally
+    // across the pectoral, and that crease — not the thickness — is what makes
+    // an arm look bolted on.
+    const anchor = shoulderF.p
       .clone()
-      .addScaledVector(shoulderF.x, side * (shoulderHalf - armBase * 0.85))
-      .addScaledVector(shoulderF.z, headR * 0.06)
-      .add(V3(0, armBase * 0.20, 0));
+      .addScaledVector(shoulderF.x, side * shoulderHalf * 0.60)
+      .addScaledVector(shoulderF.z, headR * 0.02 + zOff)
+      .add(V3(0, armBase * 0.55 + yOff, 0));
+    const deltoid = shoulderF.p
+      .clone()
+      .addScaledVector(shoulderF.x, side * shoulderHalf * 0.86)
+      .addScaledVector(shoulderF.z, headR * 0.01 + zOff * 0.8)
+      .add(V3(0, -armBase * 0.26 + yOff, 0));
 
-    const upperLen = armLen * 0.40;
-    const foreLen = armLen * 0.36;
-    const handLen = armLen * 0.24;
+    // The deltoid sits below the shoulder frame, so the humerus has to give back
+    // that drop or every race grows an extra hand's length of arm.
+    const drop = Math.max(0, shoulderF.p.y - deltoid.y);
+    const upperLen = Math.max(armLen * 0.22, armLen * 0.415 - drop * 0.85);
+    const foreLen = armLen * 0.355;
+    const handLen = armLen * 0.25;
 
-    const d1 = V3(side * splay, -1, 0.06 + B.posture * 0.95).normalize();
-    const elbow = shoulder.clone().addScaledVector(d1, upperLen);
-    const d2 = V3(side * (splay * 0.35), -1, -0.10 + B.posture * 0.55).normalize();
+    // A relaxed arm is not straight: the humerus drops slightly outward and
+    // back, the forearm carries forward off the elbow, and the two swing by
+    // different amounts on the two sides because the shoulders are not square.
+    const swing = (loaded ? 0.86 : 1.14);
+    const d1 = V3(side * splay * swing, -1, -0.02 + B.posture * 0.95).normalize();
+    const elbow = deltoid.clone().addScaledVector(d1, upperLen);
+    const bend = 0.20 * (loaded ? 1.25 : 0.80);
+    const d2 = V3(side * splay * 0.18, -1, bend + B.posture * 0.45).normalize();
     const wrist = elbow.clone().addScaledVector(d2, foreLen);
 
+    // Profile stations in true arc length, so the biceps stays on the humerus
+    // whatever the race does to the ratio of shoulder width to arm length.
+    const lenA = anchor.distanceTo(deltoid);
+    const totL = lenA + upperLen + foreLen;
+    const tD = lenA / totL;
+    const tE = (lenA + upperLen) / totL;
+    const U = (k) => lerp(tD, tE, k);   // along the humerus
+    const Fo = (k) => lerp(tE, 1, k);   // along the forearm
+    const aR = (m) => armBase * m;
+
     const mb = new MeshBuilder(UV.arm[side > 0 ? 0 : 1]);
-    tube(mb, [shoulder, elbow, wrist], armRings, {
-      aspect: [[0, 0.92], [0.45, 0.86], [1, 0.78]],
-      weight: armWeights,
+    limb(mb, [anchor, deltoid, elbow.clone().lerp(deltoid, 0.55), elbow, wrist.clone().lerp(elbow, 0.55), wrist], {
+      radius: [
+        [0.00, aR(1.10)],
+        [tD * 0.60, aR(1.26 - 0.24 * gaunt)],
+        [tD, aR(1.32 - 0.28 * gaunt)],                       // crown of the deltoid
+        [U(0.22), aR(1.08 - 0.14 * gaunt + 0.10 * musc)],
+        [U(0.40), aR(0.98 - 0.10 * gaunt + 0.12 * musc)],    // biceps / triceps belly
+        [U(0.76), aR(0.76)],
+        [U(0.96), aR(0.66 + 0.12 * gaunt)],                  // elbow — knobby when gaunt
+        [Fo(0.10), aR(0.78 + 0.16 * musc - 0.06 * gaunt)],
+        [Fo(0.26), aR(0.82 + 0.22 * musc - 0.08 * gaunt)],   // forearm belly
+        [Fo(0.62), aR(0.58)],
+        [Fo(0.88), aR(0.46 + 0.03 * gaunt)],
+        [1.00, aR(0.44)]                                     // wrist
+      ],
+      // Round through the upper arm, flattening into the wrist (which is a
+      // blade, not a rod — that is what tells the eye which way the palm faces).
+      aspect: [[0, 0.94], [tD, 0.98], [U(0.6), 0.96], [tE, 0.86], [Fo(0.5), 0.92], [1, 1.24]],
+      // Biceps forward, triceps back; the extensor mass sits on the back of the
+      // forearm. Without these the arm is a cone and reads as a broom handle.
+      front: [[0, 1], [U(0.15), 1], [U(0.42), 1 + 0.16 * musc], [tE, 1], [Fo(0.3), 1 + 0.05 * musc], [1, 1]],
+      back: [[0, 1.04], [tD, 1.06], [U(0.45), 1 + 0.20 * musc], [tE, 1.02], [Fo(0.28), 1 + 0.14 * musc], [1, 1]],
+      weight: [[0, 0.15], [tD, 0.2], [U(0.5), 0.35], [tE, 0.55], [Fo(0.5), 0.3], [1, 0.35]],
       radial: 20,
-      segments: 19,
-      capStart: 'none',
+      segments: 26,
+      capStart: 'round',
       capEnd: 'none',
       upHint: V3(0, 0, 1)
     });
     armParts.push(mb);
 
-    // Hand: a mitten flattened across the palm, with a thumb stub.
+    // ---- hand ---------------------------------------------------------------
+    // A palm slab plus four fingers and a thumb. The old mitten was a single
+    // 14 cm-deep lozenge, which at hero framing is a paddle: the silhouette of a
+    // hand is made of the notches BETWEEN the fingers, so the digits have to
+    // exist even when each one is nine pixels long.
     const hmb = new MeshBuilder(UV.hand[side > 0 ? 0 : 1]);
-    const hd = d2.clone().add(V3(0, 0, B.posture * 0.4)).normalize();
-    const thick = armBase * 0.42;
-    const hKeys = [
-      wrist.clone().addScaledVector(hd, -handLen * 0.12),
-      wrist.clone().addScaledVector(hd, handLen * 0.35),
-      wrist.clone().addScaledVector(hd, handLen * 0.72),
-      wrist.clone().addScaledVector(hd, handLen).add(V3(0, 0, handLen * 0.10))
-    ];
-    tube(hmb, hKeys, [[0, thick * 1.05], [0.25, thick * 1.15], [0.7, thick * 1.10], [1, thick * 0.45]], {
-      aspect: [[0, 1.5], [0.3, 2.1], [1, 1.9]],
-      radial: 12,
-      segments: 9,
-      capStart: 'round',
-      capEnd: 'round',
-      upHint: V3(0, 0, 1),
-      w: 0.15
-    });
-    const thumbRoot = hKeys[1].clone().addScaledVector(V3(0, 0, 1), thick * 1.6);
-    tube(
-      hmb,
-      [
-        thumbRoot,
-        thumbRoot.clone().addScaledVector(hd, handLen * 0.18).add(V3(side * thick * 0.3, 0, thick * 0.8)),
-        thumbRoot.clone().addScaledVector(hd, handLen * 0.34).add(V3(side * thick * 0.4, 0, thick * 1.1))
+    const hd = d2.clone().add(V3(0, 0, 0.05 + B.posture * 0.3)).normalize();
+    // `hFwd` is world-forward projected off the hand axis, so it points the same
+    // way on both hands (deriving it from a cross product with the side vector
+    // silently mirrors it, which fans the left hand's fingers backwards).
+    const hFwd = V3(0, 0, 1).addScaledVector(hd, -hd.z).normalize();
+    const hSide = new THREE.Vector3().crossVectors(hd, hFwd).normalize();
+    // Toward the thigh: the palm faces inward on a relaxed arm, so this is the
+    // direction the fingers curl.
+    const medial = hSide.clone().multiplyScalar(hSide.x * side < 0 ? 1 : -1);
+
+    const palmT = armBase * 0.33;                 // half thickness, across the palm
+    const palmW = armBase * 0.84;                 // half width, knuckle to knuckle
+    const palmLen = handLen * 0.56;
+    const wristP = wrist.clone().addScaledVector(hd, -handLen * 0.06);
+    const knuck = wrist.clone().addScaledVector(hd, palmLen);
+    limb(hmb, [wristP, wrist.clone().addScaledVector(hd, palmLen * 0.45), knuck], {
+      radius: [[0, palmT * 0.86], [0.30, palmT * 1.06], [0.75, palmT], [1, palmT * 0.90]],
+      aspect: [
+        [0, (palmW * 0.62) / palmT],
+        [0.35, (palmW * 0.96) / palmT],
+        [0.80, palmW / palmT],
+        [1, (palmW * 0.94) / palmT]
       ],
-      [[0, thick * 0.55], [1, thick * 0.30]],
-      { radial: 8, segments: 6, capEnd: 'round', upHint: V3(0, 1, 0), w: 0.1 }
-    );
+      radial: 12,
+      segments: 8,
+      capStart: 'round',
+      capEnd: 'flat',
+      upHint: hFwd,
+      w: 0.12
+    });
+
+    // Four fingers, fanned across the knuckle line and curling in. The relaxed
+    // hand is not flat — the little finger curls hardest.
+    const fingerLen = handLen * 0.44;
+    for (let d = 0; d < 4; d++) {
+      const k = d / 3;                                   // 0 index .. 1 little
+      const off = lerp(0.62, -0.66, k) * palmW;
+      const len = fingerLen * lerp(1.0, 0.78, Math.abs(k - 0.32) * 1.2);
+      const curl = lerp(0.36, 0.60, k);
+      const root = knuck.clone().addScaledVector(hFwd, off).addScaledVector(hd, -handLen * 0.03);
+      const mid = root.clone().addScaledVector(hd, len * 0.58).addScaledVector(medial, len * curl * 0.30);
+      const tip = mid
+        .clone()
+        .addScaledVector(hd, len * 0.38)
+        .addScaledVector(medial, len * curl)
+        .addScaledVector(hFwd, len * curl * 0.25);
+      limb(hmb, [root, mid, tip], {
+        radius: [[0, palmT * 0.48], [0.45, palmT * 0.42], [0.82, palmT * 0.38], [1, palmT * 0.26]],
+        aspect: [[0, 1.1], [1, 1.0]],
+        radial: 7,
+        segments: 6,
+        capStart: 'none',
+        capEnd: 'round',
+        upHint: hFwd,
+        w: 0.08
+      });
+    }
+
+    // Thumb: off the front-inner corner of the palm, angled across it.
+    const tRoot = wrist
+      .clone()
+      .addScaledVector(hd, palmLen * 0.26)
+      .addScaledVector(hFwd, palmW * 0.72)
+      .addScaledVector(medial, palmT * 0.35);
+    const tMid = tRoot
+      .clone()
+      .addScaledVector(hd, handLen * 0.20)
+      .addScaledVector(hFwd, palmW * 0.26)
+      .addScaledVector(medial, palmT * 0.25);
+    const tTip = tMid
+      .clone()
+      .addScaledVector(hd, handLen * 0.16)
+      .addScaledVector(hFwd, palmW * 0.02)
+      .addScaledVector(medial, palmT * 0.55);
+    limb(hmb, [tRoot, tMid, tTip], {
+      radius: [[0, palmT * 0.74], [0.5, palmT * 0.58], [1, palmT * 0.34]],
+      radial: 8,
+      segments: 6,
+      capStart: 'none',
+      capEnd: 'round',
+      upHint: hFwd,
+      w: 0.08
+    });
     armParts.push(hmb);
 
-    joints.shoulders.push({ position: shoulder.clone(), radius: armBase * 1.22, side });
+    joints.shoulders.push({ position: deltoid.clone(), radius: aR(1.32 - 0.28 * gaunt), side });
     joints.hands.push({
-      position: wrist.clone().addScaledVector(hd, handLen * 0.5),
-      radius: thick * 1.7,
+      position: wrist.clone().addScaledVector(hd, handLen * 0.42),
+      radius: palmW * 1.02,
       side
     });
   }
 
   // --- legs ------------------------------------------------------------------
-  const legBase = unit * 0.42 * B.legThick;
+  // Same idea as the arm: the femur head starts up inside the pelvis with a
+  // round cap, so the thigh grows out of the hip instead of being socketed into
+  // it, and the profile is stationed off the real knee position so the vastus,
+  // the knee and the gastrocnemius land on the right bones.
+  const legBase = unit * 0.445 * B.legThick;
   const pelvisF = frames[0];
-  const hipHalf = hipR * 0.56;
+  const hipHalf = hipR * 0.60;
   const legParts = [];
 
   // Feet style follows the feature set, never the race name:
@@ -1386,47 +1619,100 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const footStyle = !B.digitigrade ? 'foot' : F.scales > 0.5 ? 'claw' : F.tusks ? 'paw' : 'hoof';
 
   for (const side of [-1, 1]) {
-    const hip = V3(side * hipHalf, hipY, pelvisZ + hipR * 0.02);
+    const loadedLeg = side === wt;
+    // Weight on one leg: that hip rides high and the ankle tucks under the body's
+    // centre of mass; the free leg relaxes out, back and slightly bent.
+    const hip = pelvisF.p
+      .clone()
+      .addScaledVector(pelvisF.x, side * hipHalf)
+      .add(V3(0, hipR * 0.42 + (loadedLeg ? hipRise : -hipRise * 0.6), hipR * 0.04));
     const mb = new MeshBuilder(UV.leg[side > 0 ? 0 : 1]);
     let keys;
     let rad;
     let wts;
+    let asp;
+    let frontP;
+    let backP;
     let ankle;
+
+    const ankX = pelvisX * (loadedLeg ? 0.10 : 0.55) +
+      side * hipHalf * (loadedLeg ? 0.62 : 1.02);
+    const ankZ = pelvisZ + (loadedLeg ? -hipR * 0.06 : -hipR * 0.34);
 
     if (B.digitigrade) {
       // Reverse-jointed: knee forward and high, hock raised behind, then a long
       // pastern dropping forward onto the toes.
-      const knee = V3(side * hipHalf * 0.98, hipY * 0.58, pelvisZ + hipY * 0.13);
-      const hock = V3(side * hipHalf * 0.92, hipY * 0.30, pelvisZ - hipY * 0.15);
-      const pastern = V3(side * hipHalf * 0.90, hipY * 0.11, pelvisZ + hipY * 0.03);
+      const knee = V3(
+        lerp(hip.x, ankX, 0.30),
+        hipY * 0.60,
+        pelvisZ + hipY * (loadedLeg ? 0.125 : 0.165)
+      );
+      const hock = V3(lerp(hip.x, ankX, 0.72), hipY * 0.31, pelvisZ - hipY * 0.15);
+      const pastern = V3(ankX, hipY * 0.11, ankZ + hipY * 0.05);
       keys = [hip, knee, hock, pastern];
+      // A digitigrade leg is a thigh the size of a ham on a shin like a cable —
+      // that contrast IS the silhouette, so the top gets more, not less.
       rad = [
-        [0.00, legBase * 1.42], [0.14, legBase * 1.34], [0.33, legBase * 0.86],
-        [0.46, legBase * 0.92], [0.66, legBase * (0.44 + 0.06 * gaunt)],
-        [0.85, legBase * 0.34], [1.00, legBase * 0.30]
+        [0.00, legBase * 1.72], [0.09, legBase * (1.68 - 0.20 * gaunt)],
+        [0.20, legBase * (1.46 - 0.14 * gaunt + 0.12 * musc)],
+        [0.33, legBase * (0.96 + 0.10 * gaunt)],
+        [0.40, legBase * (0.92 + 0.08 * gaunt)],
+        [0.50, legBase * (1.02 + 0.18 * musc - 0.10 * gaunt)],
+        [0.68, legBase * (0.46 + 0.06 * gaunt)],
+        [0.85, legBase * 0.36], [1.00, legBase * 0.32]
       ];
-      wts = [[0, 0.8], [0.15, 0.3], [0.33, 0.85], [0.5, 0.35], [0.66, 0.8], [1, 0.4]];
+      asp = [[0, 1.00], [0.33, 0.90], [0.6, 0.92], [1, 0.86]];
+      frontP = [[0, 1], [0.2, 1 + 0.10 * musc], [0.42, 0.96], [1, 1]];
+      backP = [[0, 1.14], [0.14, 1.20], [0.34, 1.00], [0.50, 1 + 0.30 * musc], [0.8, 1.0], [1, 1.0]];
+      wts = [[0, 0.15], [0.15, 0.3], [0.33, 0.7], [0.5, 0.35], [0.66, 0.7], [1, 0.4]];
       ankle = pastern;
     } else {
-      const knee = V3(side * hipHalf * 0.94, hipY * 0.50, pelvisZ + hipY * 0.035);
-      const ank = V3(side * hipHalf * 0.86, H * 0.052, pelvisZ - hipY * 0.02);
-      keys = [hip, knee, ank];
+      const knee = V3(
+        lerp(hip.x, ankX, 0.55),
+        hipY * 0.50,
+        pelvisZ + hipY * (loadedLeg ? 0.010 : 0.075)
+      );
+      const ank = V3(ankX, H * 0.052, ankZ);
+      keys = [hip, knee.clone().lerp(hip, 0.5), knee, ank.clone().lerp(knee, 0.55), ank];
+
+      const lenT = hip.distanceTo(knee);
+      const tot = lenT + knee.distanceTo(ank);
+      const tK = lenT / tot;
+      const Th = (k) => tK * k;
+      const Sh = (k) => lerp(tK, 1, k);
       rad = [
-        [0.00, legBase * 1.38], [0.12, legBase * 1.26], [0.34, legBase * 1.02],
-        [0.50, legBase * (0.74 + 0.10 * gaunt)], [0.62, legBase * 0.88],
-        [0.86, legBase * 0.42], [1.00, legBase * 0.36]
+        [0.00, legBase * 1.46],                                        // femoral head
+        [Th(0.14), legBase * (1.40 - 0.20 * gaunt)],
+        [Th(0.38), legBase * (1.22 - 0.14 * gaunt + 0.12 * musc)],     // thigh mass
+        [Th(0.72), legBase * (1.00 + 0.06 * musc)],                    // vastus
+        [Th(0.93), legBase * (0.86 + 0.08 * gaunt)],
+        [tK, legBase * (0.82 + 0.14 * gaunt)],                         // knee
+        [Sh(0.09), legBase * (0.90 + 0.04 * gaunt)],
+        [Sh(0.25), legBase * (0.98 + 0.18 * musc - 0.16 * gaunt)],     // calf belly
+        [Sh(0.58), legBase * 0.68],
+        [Sh(0.84), legBase * 0.44],
+        [1.00, legBase * 0.38]                                         // ankle
       ];
-      wts = [[0, 0.8], [0.2, 0.3], [0.5, 0.85], [0.7, 0.35], [1, 0.4]];
+      asp = [[0, 1.00], [Th(0.5), 0.98], [tK, 0.88], [Sh(0.3), 0.94], [1, 0.80]];
+      // The shin bone is a flat plate at the front; all the meat is behind it.
+      frontP = [[0, 1], [Th(0.55), 1 + 0.07 * musc], [tK, 0.97], [Sh(0.3), 0.90], [Sh(0.7), 0.96], [1, 1]];
+      backP = [
+        [0, 1.12], [Th(0.16), 1.18], [Th(0.6), 1.04], [tK, 1.0],
+        [Sh(0.24), 1 + 0.36 * musc], [Sh(0.62), 1.02], [1, 0.94]
+      ];
+      wts = [[0, 0.15], [Th(0.4), 0.3], [tK, 0.6], [Sh(0.35), 0.3], [1, 0.4]];
       ankle = ank;
     }
 
-    tube(mb, keys, rad, {
-      aspect: [[0, 0.90], [0.5, 0.88], [1, 0.86]],
-      back: [[0, 1.06], [0.55, 1.14], [0.8, 1.0], [1, 1.0]],
+    limb(mb, keys, {
+      radius: rad,
+      aspect: asp,
+      front: frontP,
+      back: backP,
       weight: wts,
       radial: 22,
-      segments: 21,
-      capStart: 'none',
+      segments: 26,
+      capStart: 'round',
       capEnd: 'none',
       upHint: V3(0, 0, 1)
     });
@@ -1434,7 +1720,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
 
     // ---- foot ---------------------------------------------------------------
     const fmb = new MeshBuilder(UV.foot[side > 0 ? 0 : 1]);
-    const footW = legBase * (footStyle === 'hoof' ? 0.62 : 0.80);
+    const footW = legBase * (footStyle === 'hoof' ? 0.58 : 0.70);
     let contactZ = ankle.z;
 
     if (footStyle === 'hoof') {
@@ -1474,8 +1760,13 @@ export function buildBodyGeometry(build, features, opts = {}) {
       const rings = [];
       for (let i = 0; i < N; i++) {
         const t = i / (N - 1);
-        const r = footW * profile([[0, 0.72], [0.18, 1.0], [0.62, 1.06], [0.86, 0.94], [1, 0.42]], t);
-        const asp = profile([[0, 1.35], [0.25, 0.95], [0.7, 0.62], [1, 0.45]], t);
+        // Narrow rounded heel, a waist at the arch, then the ball of the foot
+        // spreading wide and dropping to the toes. A single even lozenge is a
+        // slipper; the arch waist is what makes it a foot.
+        const r = footW * profile(
+          [[0, 0.58], [0.13, 0.88], [0.34, 0.80], [0.58, 1.06], [0.76, 1.08], [0.90, 0.96], [1, 0.48]], t);
+        const asp = profile(
+          [[0, 1.55], [0.14, 1.42], [0.36, 1.02], [0.62, 0.76], [0.86, 0.56], [1, 0.40]], t);
         rings.push({ r, aspect: asp, n: 2.4, w: 0.12 });
         path.push(V3(ankle.x, r * asp, lerp(heel, toe, t)));
       }
@@ -1506,6 +1797,23 @@ export function buildBodyGeometry(build, features, opts = {}) {
       } else {
         contactZ = lerp(heel, toe, 0.45);
       }
+    }
+
+    // Toe-out. Feet dead parallel is a shop-window mannequin; a standing figure
+    // turns both feet out and the free one further than the loaded one. The
+    // rotation is about a vertical axis through the ankle, so the sole stays on
+    // y = 0 and the foot joint the boot module fits to just comes along.
+    const toeOut = (loadedLeg ? 0.11 : 0.30) * side;
+    if (toeOut) {
+      const rotM = new THREE.Matrix4()
+        .makeTranslation(ankle.x, 0, ankle.z)
+        .multiply(new THREE.Matrix4().makeRotationY(toeOut))
+        .multiply(new THREE.Matrix4().makeTranslation(-ankle.x, 0, -ankle.z));
+      fmb.applyMatrix(rotM);
+      const c = V3(ankle.x, 0, contactZ).applyMatrix4(rotM);
+      legParts.push(fmb);
+      joints.feet.push({ position: c, radius: footW, side });
+      continue;
     }
     legParts.push(fmb);
     joints.feet.push({ position: V3(ankle.x, 0, contactZ), radius: footW, side });
@@ -1712,7 +2020,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
       side: s.side
     })),
     hands: joints.hands.map((h) => ({ position: fix(h.position), radius: h.radius * scale, side: h.side })),
-    hips: { position: fix(V3(0, hipY, pelvisZ)), radius: hipR * scale },
+    hips: { position: fix(spinePts[0].clone()), radius: hipR * scale },
     // Ground contact is reported dead on y = 0 so boots and greaves can sit on
     // the floor plane without a per-race fudge.
     feet: joints.feet.map((f) => {
