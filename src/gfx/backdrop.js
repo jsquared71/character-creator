@@ -20,29 +20,8 @@ import { FACTIONS } from '../data/races.js';
 
 const TAU = 6.283185307179586;
 
-// ---------------------------------------------------------------------------
-// Spine workaround — see the note in the final report.
-//
-// three's standard fragment prefix unconditionally emits
-//     float luminance( const in vec3 rgb ) { ... }
-// (WebGLProgram, getLuminanceFunction) and NOISE_GLSL in src/gfx/glsl/noise.js
-// declares `float luminance(vec3)` a second time, so *every* Bakery shader
-// fails to link with "'luminance' : function already has a body". I own neither
-// bakery.js nor noise.js, so I cannot fix it at the source.
-//
-// The only text the Bakery lets an author emit *ahead* of NOISE_GLSL is the
-// uniform declaration block, which it builds by interpolating the keys of the
-// `uniforms` object. Smuggling a #define through that channel renames the noise
-// library's copy and leaves three's own alone. It costs one dead uniform and is
-// inert if the spine is ever fixed — an unused macro expands to nothing.
-const LUMA_FIX_KEY =
-  'bakeryPad0;\n#define luminance noiseLuminance\nuniform float bakeryPad1';
-
 function bake(bakery, key, body, opts = {}) {
-  return bakery.bake(key, body, {
-    ...opts,
-    uniforms: { [LUMA_FIX_KEY]: 0.0, ...(opts.uniforms || {}) }
-  });
+  return bakery.bake(key, body, opts);
 }
 
 // ---------------------------------------------------------------------------
