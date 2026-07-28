@@ -7,3 +7,7 @@ node_modules/
 node_modules/
 shots/
 package-lock.json
+
+# Scratch directories created by build/fix agents while iterating.
+.hairtmp/
+*.bak

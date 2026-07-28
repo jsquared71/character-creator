@@ -28,8 +28,12 @@ const MAX_INSTANCES = 900;
 // single card and the per-card width ratio along a strand chain.
 const CARD_RINGS = 4;
 const CARD_TIP = 0.74;
-const CARD_TWIST = 0.30;
-const CARD_THICK = 0.20; // half-thickness relative to half-width
+// Twist baked into one card. `assemble` advances the instance twist by exactly
+// this much per card in a chain, so card k's tip cross-section and card k+1's
+// root cross-section are the same rotation and the lock does not kink at every
+// join. Changing one without the other puts a visible facet at every seam.
+const CARD_TWIST = 0.10;
+const CARD_THICK = 0.22; // half-thickness relative to half-width
 
 const UP_Y = new THREE.Vector3(0, 1, 0);
 
@@ -74,11 +78,20 @@ function patchNoise(x, y) {
 function createCardGeometry() {
   // Cross-section: a thin diamond in local XZ. Closed loop, so the card has
   // real (if slight) thickness and never reads as a zero-width sheet edge-on.
+  //
+  // The third column is U. It is NOT the perimeter arc-length: the card texture
+  // baked by materials/hair.js paints its strands across U in 0..1 and feathers
+  // *both* U borders, so U has to run across the ribbon's face. Wrapping U once
+  // around the closed loop instead (0, .25, .5, .75, 1) squeezes half the
+  // strands onto the front face and half onto the back, and lands both feathered
+  // borders on the same physical edge — leaving the opposite edge a hard cut.
+  // Mirroring U over the loop gives each face the full strand set with a soft
+  // edge on both sides, and front/back agree on where each strand is.
   const cross = [
-    [0.5, 0],
-    [0, CARD_THICK * 0.5],
-    [-0.5, 0],
-    [0, -CARD_THICK * 0.5]
+    [0.5, 0, 0],
+    [0, CARD_THICK * 0.5, 0.5],
+    [-0.5, 0, 1],
+    [0, -CARD_THICK * 0.5, 0.5]
   ];
   const sides = cross.length;
   const perRing = sides + 1; // duplicated seam vertex so U can reach 1
@@ -106,7 +119,7 @@ function createCardGeometry() {
       positions[p++] = x * ca - z * sa;
       positions[p++] = v;
       positions[p++] = x * sa + z * ca;
-      uvs[q++] = j / sides;
+      uvs[q++] = c[2];
       uvs[q++] = v;
     }
   }
@@ -153,6 +166,7 @@ function scalpFrame(joints) {
 
   let center = scalp.position.clone();
   let radius = scalp.radius > 0 ? scalp.radius : 0.11;
+  let fitted = false;
 
   // `scalp` may be handed to us as a *surface* anchor (the crown) rather than
   // the centre of the skull. If a head joint exists and the scalp anchor sits
@@ -164,10 +178,56 @@ function scalpFrame(joints) {
     if (d > head.radius * 0.5) {
       center = head.position.clone();
       radius = head.radius;
+      fitted = true;
     }
   }
 
-  return { center, radius, up, forward, right, anchor: scalp.position.clone() };
+  // THE SKULL IS NOT A SPHERE, AND THIS IS THE WHOLE BALLGAME.
+  //
+  // `head.radius` is one scale factor; the body loft builds the cranium as a
+  // deformed ellipsoid roughly (0.95, 1.14, 1.00) x that radius, with a heavier
+  // occiput behind. Rooting hair on a sphere of head.radius sinks the entire
+  // crown ~13% of a head radius *inside the skin*: every card up there is
+  // swallowed by the head mesh, the crown renders bald, and the only hair you
+  // can see is the low-latitude strands where the sphere pokes back out through
+  // the narrower temples — i.e. hard fragments erupting from the sides of an
+  // otherwise bare skull. Even a 2% under-estimate here costs whole patches,
+  // because a card lying flat on the scalp only clears the skin by a fraction
+  // of its own width.
+  //
+  // So: model the dome triaxially, and err *outwards*. A root floating 3 mm
+  // proud of the skin is invisible; a root 3 mm under it is gone. The one axis
+  // that can be measured rather than assumed is the polar one —
+  // `joints.scalp.position` is a real point ON the surface near the crown — so
+  // fit that and keep conservative constants for the rest.
+  const ax = radius * 0.99;   // ear to ear
+  const azF = radius * 1.03;  // brow
+  const azB = radius * 1.14;  // occiput
+  let ay = radius * 1.15;     // crown, replaced by the fit below
+  if (fitted) {
+    const d = scalp.position.clone().sub(center);
+    const along = d.dot(up);
+    d.addScaledVector(up, -along);
+    const lateral = d.length();
+    // Anchor must actually be up on the dome for the fit to be meaningful.
+    if (along > radius * 0.35) {
+      let re = ax;
+      if (lateral > 1e-9) {
+        const xh = d.dot(right) / lateral;
+        const zh = d.dot(forward) / lateral;
+        const az = lerp(azF, azB, clamp01(0.5 - 0.5 * zh));
+        re = 1 / Math.sqrt((xh * xh) / (ax * ax) + (zh * zh) / (az * az));
+      }
+      const k = clamp(lateral / re, 0, 0.92);
+      ay = clamp(along / Math.sqrt(1 - k * k), radius * 0.9, radius * 1.9);
+    }
+  }
+
+  return {
+    center, radius, up, forward, right,
+    ax, ay, azF, azB,
+    anchor: scalp.position.clone()
+  };
 }
 
 // Point on the scalp dome. theta = angle from `up`, phi = azimuth from
@@ -184,6 +244,53 @@ function domePoint(frame, theta, phi, out) {
   return out.normalize();
 }
 
+// Scratch for the dome maths; every helper below runs in the build loop.
+const _dx = { x: 0, y: 0, z: 0, ax: 1, ay: 1, az: 1 };
+function domeAxes(frame, dir) {
+  _dx.x = dir.dot(frame.right);
+  _dx.y = dir.dot(frame.up);
+  _dx.z = dir.dot(frame.forward);
+  _dx.ax = frame.ax;
+  _dx.ay = frame.ay;
+  _dx.az = lerp(frame.azF, frame.azB, clamp01(0.5 - 0.5 * _dx.z));
+  return _dx;
+}
+
+/** Distance from the head centre to the skull surface along a unit direction. */
+function domeRadius(frame, dir) {
+  const A = domeAxes(frame, dir);
+  const q = (A.x * A.x) / (A.ax * A.ax) +
+    (A.y * A.y) / (A.ay * A.ay) +
+    (A.z * A.z) / (A.az * A.az);
+  return q > 1e-12 ? 1 / Math.sqrt(q) : frame.radius;
+}
+
+/** Root a strand on the skull surface along `dir`, at `k` x the surface depth. */
+function rootAt(ctx, dir, k, out) {
+  const r = domeRadius(ctx.frame, dir) * k;
+  return (out || new THREE.Vector3()).copy(ctx.center).addScaledVector(dir, r);
+}
+
+/**
+ * Outward surface normal of the skull at the point `dir` picks out. On anything
+ * but a sphere this is NOT the radius direction, and cards laid flat against
+ * the radius instead of the normal tip into the skin near the temples.
+ */
+function domeNormal(frame, dir, out) {
+  const A = domeAxes(frame, dir);
+  out.set(0, 0, 0)
+    .addScaledVector(frame.right, A.x / (A.ax * A.ax))
+    .addScaledVector(frame.up, A.y / (A.ay * A.ay))
+    .addScaledVector(frame.forward, A.z / (A.az * A.az));
+  if (out.lengthSq() < 1e-12) out.copy(dir);
+  return out.normalize();
+}
+
+/** The skull volume a growing strand is not allowed to sink into. */
+function skullOf(ctx, inflate) {
+  return { frame: ctx.frame, center: ctx.center, up: ctx.up, k: inflate == null ? 1 : inflate };
+}
+
 /* ------------------------------------------------------------------ *
  * style + race tables
  * ------------------------------------------------------------------ */
@@ -193,7 +300,7 @@ const STYLES = [
     id: 'long', name: 'Long Flowing',
     strands: 120, length: 4.2, segs: 7, gravity: 0.62, stiff: 0.16, outward: 0.22,
     noise: 0.09, curl: 0.06, width: 0.32, thetaFront: 1.02, thetaBack: 2.10,
-    cap: 1.0, flow: 0.38, part: 0.55, fringe: 0.42
+    cap: 1.0, flow: 0.38, part: 0.42, fringe: 0.30
   },
   {
     id: 'braid', name: 'Braided',
@@ -233,7 +340,7 @@ const STYLES = [
     id: 'twin', name: 'Twin Tails',
     strands: 104, length: 0.95, segs: 4, gravity: 0.28, stiff: 0.46, outward: 0.18,
     noise: 0.05, curl: 0.03, width: 0.29, thetaFront: 1.00, thetaBack: 1.92,
-    cap: 1.0, flow: 0.8, part: 0.45, fringe: 0.5,
+    cap: 1.0, flow: 0.8, part: 0.35, fringe: 0.5,
     gather: 'twin', tails: true
   },
   {
@@ -399,11 +506,16 @@ function growStrand(rng, root, dir0, P) {
     pos.addScaledVector(dir, step * (0.85 + rng() * 0.3));
 
     // Keep hair off the skull without flattening long hair against the chest.
-    if (P.skullCenter && P.skullRadius > 0) {
-      tmp.copy(pos).sub(P.skullCenter);
+    // The skull is the fitted triaxial dome, not a sphere — see scalpFrame().
+    if (P.skull) {
+      tmp.copy(pos).sub(P.skull.center);
       const d = tmp.length();
-      if (d < P.skullRadius && d > 1e-6 && tmp.dot(P.up) > -P.skullRadius * 0.45) {
-        pos.copy(P.skullCenter).addScaledVector(tmp.divideScalar(d), P.skullRadius);
+      if (d > 1e-6) {
+        tmp.divideScalar(d);
+        if (tmp.dot(P.skull.up) > -0.45) {
+          const rr = domeRadius(P.skull.frame, tmp) * P.skull.k;
+          if (d < rr) pos.copy(P.skull.center).addScaledVector(tmp, rr);
+        }
       }
     }
 
@@ -555,6 +667,7 @@ function pushStrand(ctx, points, o) {
     seed: o.seed,
     twist: o.twist || 0,
     face: o.face || null,
+    axis: o.axis || null,
     priority: o.priority == null ? 1 : o.priority,
     rank: o.rank == null ? ctx.rng() : o.rank
   });
@@ -573,40 +686,57 @@ function tintFor(ctx) {
  * the parting; this fills them so the scalp never shows through.
  */
 function emitCapLayer(ctx) {
-  const { style, profile, rng, R, center } = ctx;
+  const { style, profile, rng, R } = ctx;
   if (!style.cap) return;
-  const n = Math.round(34 * style.cap * clamp(profile.density, 0.5, 1.4));
+  // THREE CROSSED PASSES. A card lying flat on the scalp is a plate whose
+  // normal is the scalp normal, so it hides scalp well when you look straight
+  // at it and hides almost nothing when you look along it. Every cap card
+  // following the same flow field means they all foreshorten *together* — at
+  // the crown, seen from the front, the whole layer collapses to a set of thin
+  // lines and the skin comes through between them. Fanning the passes across
+  // the flow guarantees that from any angle one pass is still presenting area.
+  const n = Math.round(44 * style.cap * clamp(profile.density, 0.5, 1.4));
+  const fan = [0, 1.15, -1.15];
   const dir = new THREE.Vector3();
+  const nrm = new THREE.Vector3();
   const root = new THREE.Vector3();
-  for (let i = 0; i < n; i++) {
-    const u = (i + 0.5) / n;
-    const theta = Math.acos(1 - u * 0.92) * 0.98;
-    const phi = i * 2.399963 + rng() * 0.4;
-    if (!acceptRoot(ctx, theta, phi, -0.16)) continue;
-    domePoint(ctx.frame, theta, phi, dir);
-    root.copy(center).addScaledVector(dir, R * 0.985);
-    const P = {
-      length: R * 0.50 * profile.length,
-      segs: 2,
-      gravity: 0.35 * profile.gravity,
-      stiff: 0.7,
-      noise: 0.05,
-      curl: 0,
-      skullCenter: center,
-      skullRadius: R * 1.0,
-      up: ctx.up
-    };
-    const d0 = flowDir(ctx, dir, clamp01((style.flow || 0.4) * 0.8 + 0.15), new THREE.Vector3());
-    d0.addScaledVector(dir, 0.30);
-    const pts = growStrand(rng, root, d0, P);
-    pushStrand(ctx, pts, {
-      width: strandWidth(ctx, 2.15),
-      tint: clamp01(tintFor(ctx) * 0.75),
-      seed: rng(),
-      twist: (rng() - 0.5) * 0.5,
-      face: dir.clone(),
-      priority: 3
-    });
+  const flow = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  for (let pass = 0; pass < fan.length; pass++) {
+    for (let i = 0; i < n; i++) {
+      const u = (i + 0.5) / n;
+      const theta = Math.acos(1 - u * 0.98) * (0.98 + pass * 0.045);
+      const phi = i * 2.399963 + pass * 1.17 + rng() * 0.35;
+      if (!acceptRoot(ctx, theta, phi, -0.10)) continue;
+      domePoint(ctx.frame, theta, phi, dir);
+      domeNormal(ctx.frame, dir, nrm);
+      // Sit the cap a hair proud of the skin: buried roots are invisible roots.
+      rootAt(ctx, dir, 1.006 + pass * 0.008, root);
+      const P = {
+        length: R * (0.58 - pass * 0.06) * profile.length,
+        segs: 1,
+        gravity: (pass === 0 ? 0.32 : 0.18) * profile.gravity,
+        stiff: 0.74,
+        noise: 0.05,
+        curl: 0,
+        skull: skullOf(ctx, 1.005 + pass * 0.008),
+        up: ctx.up
+      };
+      flowDir(ctx, nrm, clamp01((style.flow || 0.4) * 0.8 + 0.15), flow);
+      const a = fan[pass] + (rng() - 0.5) * 0.35;
+      side.crossVectors(nrm, flow);
+      const d0 = flow.clone().multiplyScalar(Math.cos(a)).addScaledVector(side, Math.sin(a));
+      d0.addScaledVector(nrm, 0.24);
+      const pts = growStrand(rng, root, d0, P);
+      pushStrand(ctx, pts, {
+        width: strandWidth(ctx, 1.55 - pass * 0.12),
+        tint: clamp01(tintFor(ctx) * (0.70 + pass * 0.06)),
+        seed: rng(),
+        twist: (rng() - 0.5) * 0.35,
+        face: nrm.clone(),
+        priority: 4 - pass * 0.5
+      });
+    }
   }
 }
 
@@ -625,6 +755,7 @@ function emitScalp(ctx) {
   }
 
   const dir = new THREE.Vector3();
+  const nrm = new THREE.Vector3();
   const root = new THREE.Vector3();
   let made = 0;
   const attempts = target * 3;
@@ -636,14 +767,15 @@ function emitScalp(ctx) {
     made++;
 
     domePoint(ctx.frame, theta, phi, dir);
-    root.copy(center).addScaledVector(dir, R * 0.99);
+    domeNormal(ctx.frame, dir, nrm);
+    rootAt(ctx, dir, 1.005, root);
 
     const volume = profile.volume;
     const front = clamp01(0.5 + 0.5 * Math.cos(phi));
 
     // Grow along the scalp's flow field, lifted off the surface by `outward`.
-    const d0 = flowDir(ctx, dir, clamp01(style.flow), new THREE.Vector3());
-    d0.addScaledVector(dir, style.outward * (0.6 + 0.4 * volume) + 0.12);
+    const d0 = flowDir(ctx, nrm, clamp01(style.flow), new THREE.Vector3());
+    d0.addScaledVector(nrm, style.outward * (0.6 + 0.4 * volume) + 0.12);
     // Centre part: the fringe is pushed off the face to either side.
     const side = Math.sin(phi) >= 0 ? 1 : -1;
     d0.addScaledVector(right, side * style.part * front * (0.7 + rng() * 0.6));
@@ -690,18 +822,18 @@ function emitScalp(ctx) {
       gather,
       gatherAmt: gather ? 0.55 : 0,
       gatherSegs: Math.max(1, style.segs - 1),
-      skullCenter: center,
-      skullRadius: R * 1.02,
+      skull: skullOf(ctx, 1.01),
       up
     };
 
     const pts = growStrand(rng, root, d0, P);
     pushStrand(ctx, pts, {
-      width: strandWidth(ctx, 0.9 + rng() * 0.5),
+      width: strandWidth(ctx, 0.85 + rng() * 0.45),
       tint: tintFor(ctx),
       seed: rng(),
-      twist: (rng() - 0.5) * 0.8,
-      face: dir.clone(),
+      twist: (rng() - 0.5) * 0.5,
+      face: nrm.clone(),
+      axis: { origin: center, up },
       priority: 1
     });
   }
@@ -746,8 +878,7 @@ function emitTopknot(ctx) {
       curl: style.curl,
       curlFreq: 1.3,
       curlAxis: ctx.right.clone(),
-      skullCenter: center,
-      skullRadius: R * 1.03,
+      skull: skullOf(ctx, 1.02),
       up
     };
     const pts = growStrand(rng, root, d0, P);
@@ -813,8 +944,7 @@ function emitTwinTails(ctx) {
         curl: 0.07,
         curlFreq: 1.0 + rng() * 0.6,
         curlAxis: fwd.clone(),
-        skullCenter: center,
-        skullRadius: R * 1.03,
+        skull: skullOf(ctx, 1.02),
         up
       };
       const pts = growStrand(rng, root, d0, P);
@@ -954,7 +1084,7 @@ function emitCrest(ctx) {
     // Signed arc: negative sweeps down the forehead, positive down the nape.
     const theta = lerp(-1.05, 1.65, s);
     domePoint(ctx.frame, Math.abs(theta), theta < 0 ? 0 : Math.PI, dir);
-    const rootBase = center.clone().addScaledVector(dir, R * 0.99);
+    const rootBase = rootAt(ctx, dir, 1.0);
 
     // Classic mohawk profile: tallest just behind the crown.
     const tall = 0.42 + 0.85 * Math.sin(Math.PI * clamp01(s * 0.92 + 0.06));
@@ -976,8 +1106,7 @@ function emitCrest(ctx) {
         curlAxis: right.clone(),
         drift: fwd.clone().multiplyScalar(-1),
         driftAmt: 0.10,
-        skullCenter: center,
-        skullRadius: R * 1.02,
+        skull: skullOf(ctx, 1.01),
         up
       };
       const pts = growStrand(rng, root, d0, P);
@@ -1091,7 +1220,7 @@ function emitBeard(ctx, plan) {
     if (!chinOnly && theta < 2.05 && Math.abs(phi) < 0.32) continue;
 
     jawPoint(ctx, theta, phi, dir);
-    const root = center.clone().addScaledVector(dir, R * 0.99);
+    const root = rootAt(ctx, dir, 1.0);
 
     const front = clamp01(Math.cos(phi));
     const len = R * (chinOnly ? 0.85 : 1.65) * (plan.length || 1) *
@@ -1111,8 +1240,7 @@ function emitBeard(ctx, plan) {
       curl: 0.06,
       curlFreq: 1.2,
       curlAxis: right.clone(),
-      skullCenter: center,
-      skullRadius: R * 1.01,
+      skull: skullOf(ctx, 1.005),
       up
     };
     const pts = growStrand(rng, root, d0, P);
@@ -1137,7 +1265,7 @@ function emitMustache(ctx, plan) {
     const phi = s * lerp(0.10, 0.52, k);
     const theta = lerp(1.92, 2.05, rng());
     jawPoint(ctx, theta, phi, dir);
-    const root = center.clone().addScaledVector(dir, R * 0.99);
+    const root = rootAt(ctx, dir, 1.0);
     const d0 = dir.clone().multiplyScalar(0.6)
       .addScaledVector(right, s * (0.5 + k * 0.7))
       .addScaledVector(up, -0.35 - k * 0.3);
@@ -1168,7 +1296,7 @@ function emitSideburns(ctx, plan) {
       const phi = s * (1.25 + (rng() - 0.5) * 0.22);
       const dir = new THREE.Vector3();
       domePoint(ctx.frame, theta, phi, dir);
-      const root = center.clone().addScaledVector(dir, R * 0.99);
+      const root = rootAt(ctx, dir, 1.0);
       const d0 = dir.clone().multiplyScalar(0.45).addScaledVector(up, -0.9);
       const pts = growStrand(rng, root, d0, {
         length: R * 1.0 * (plan.length || 1) * (0.7 + rng() * 0.5),
@@ -1177,8 +1305,7 @@ function emitSideburns(ctx, plan) {
         stiff: 0.42,
         noise: 0.1,
         curl: 0,
-        skullCenter: center,
-        skullRadius: R * 1.01,
+        skull: skullOf(ctx, 1.005),
         up
       });
       pushStrand(ctx, pts, {
@@ -1199,7 +1326,7 @@ function emitBeardBraids(ctx, plan) {
     const s = count === 1 ? 0 : (b % 2 === 0 ? -1 : 1) * (0.34 + 0.16 * Math.floor(b / 2));
     const dir = new THREE.Vector3();
     jawPoint(ctx, 2.55, s, dir);
-    const anchor = center.clone().addScaledVector(dir, R * 1.0);
+    const anchor = rootAt(ctx, dir, 1.0);
 
     const segs = 6;
     const centreline = [];
@@ -1255,7 +1382,7 @@ function emitTendrils(ctx, plan) {
       const theta = lerp(1.95, 2.25, rng());
       const dir = new THREE.Vector3();
       jawPoint(ctx, theta, phi, dir);
-      const root = center.clone().addScaledVector(dir, R * 0.99);
+      const root = rootAt(ctx, dir, 1.0);
       const d0 = dir.clone().multiplyScalar(0.4).addScaledVector(up, -1.0)
         .addScaledVector(fwd, 0.15);
       const pts = growStrand(rng, root, d0, {
@@ -1337,6 +1464,12 @@ function assemble(strands, material, raceName, styleId) {
   const geometry = createCardGeometry();
   const seeds = new Float32Array(count);
   const tints = new Float32Array(count);
+  // Where this card sits inside its whole strand, as a 0..1 span. The material
+  // shades root-to-tip (dark dense root, pale frayed tip) and it has to do that
+  // over the *strand*, not over every card: driving it from the card's own
+  // uv.y instead restarts the gradient at every join and chops one lock into a
+  // row of separately-rooted, separately-tipped fragments.
+  const spans = new Float32Array(count * 2);
   const mesh = new THREE.InstancedMesh(geometry, material, count);
 
   const m = new THREE.Matrix4();
@@ -1345,15 +1478,26 @@ function assemble(strands, material, raceName, styleId) {
   const zAxis = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const hint = new THREE.Vector3();
+  const radial = new THREE.Vector3();
   const fallback = new THREE.Vector3();
 
   let idx = 0;
   for (const s of kept) {
     const pts = s.points;
+    const nCards = pts.length - 1;
     // Reference point cards face away from: the strand's own start region.
     const originRef = s.face ? null : pts[0];
+    // Arc length, so the span of each card matches its share of the lock.
+    let total = 0;
+    const cum = [0];
+    for (let k = 0; k < nCards; k++) {
+      total += pts[k].distanceTo(pts[k + 1]);
+      cum.push(total);
+    }
+    if (total < 1e-9) total = 1;
+
     let width = s.width;
-    for (let k = 0; k < pts.length - 1; k++) {
+    for (let k = 0; k < nCards; k++) {
       const p0 = pts[k];
       const p1 = pts[k + 1];
       tangent.copy(p1).sub(p0);
@@ -1363,6 +1507,19 @@ function assemble(strands, material, raceName, styleId) {
 
       if (s.face) hint.copy(s.face);
       else hint.copy(p0).sub(originRef).normalize();
+
+      // The root normal is only the right facing at the root. Once a lock has
+      // fallen clear of the skull, keep the ribbon turned away from the body
+      // axis instead of frozen in the direction it started in — otherwise long
+      // hair rolls edge-on to the camera partway down and reads as a hard line.
+      if (s.axis && nCards > 1) {
+        radial.copy(p0).sub(s.axis.origin);
+        radial.addScaledVector(s.axis.up, -radial.dot(s.axis.up));
+        if (radial.lengthSq() > 1e-8) {
+          radial.normalize();
+          hint.lerp(radial, 0.85 * (k / nCards));
+        }
+      }
       if (hint.lengthSq() < 1e-8) hint.copy(UP_Y);
 
       // x = width axis, z = card facing axis (~hint), y = along the strand.
@@ -1376,7 +1533,9 @@ function assemble(strands, material, raceName, styleId) {
       zAxis.crossVectors(tangent, xAxis).normalize();
 
       // Progressive twist along the chain keeps the ribbon from reading flat.
-      const ang = s.twist + k * 0.16;
+      // The step is exactly CARD_TWIST so each card picks up the rotation the
+      // previous card's tip ended on and the chain stays a smooth ribbon.
+      const ang = s.twist + k * CARD_TWIST;
       if (ang !== 0) {
         const c = Math.cos(ang);
         const sn = Math.sin(ang);
@@ -1400,6 +1559,8 @@ function assemble(strands, material, raceName, styleId) {
       mesh.setMatrixAt(idx, m);
       seeds[idx] = s.seed;
       tints[idx] = s.tint;
+      spans[idx * 2] = cum[k] / total;
+      spans[idx * 2 + 1] = cum[k + 1] / total;
       idx++;
 
       width *= CARD_TIP;
@@ -1414,12 +1575,15 @@ function assemble(strands, material, raceName, styleId) {
       mesh.setMatrixAt(i, m);
       seeds[i] = 0;
       tints[i] = 0.5;
+      spans[i * 2] = 0;
+      spans[i * 2 + 1] = 1;
     }
   }
 
   mesh.instanceMatrix.needsUpdate = true;
   geometry.setAttribute('aStrandSeed', new THREE.InstancedBufferAttribute(seeds, 1));
   geometry.setAttribute('aStrandTint', new THREE.InstancedBufferAttribute(tints, 1));
+  geometry.setAttribute('aStrandSpan', new THREE.InstancedBufferAttribute(spans, 2));
 
   mesh.name = 'hair-' + styleId;
   mesh.castShadow = true;
@@ -1431,7 +1595,7 @@ function assemble(strands, material, raceName, styleId) {
     style: styleId,
     strands: kept.length,
     instances: count,
-    attributes: ['aStrandSeed', 'aStrandTint']
+    attributes: ['aStrandSeed', 'aStrandTint', 'aStrandSpan']
   };
   return mesh;
 }

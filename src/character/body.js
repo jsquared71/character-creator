@@ -41,6 +41,16 @@ function smoothstep(e0, e1, x) {
 /** Unit-height gaussian, `s` is the standard deviation. */
 const gauss = (x, s) => Math.exp(-(x * x) / (2 * s * s));
 
+/** Anisotropic 2D gaussian — the workhorse for localised facial features. */
+const blob2 = (dx, dy, sx, sy) => Math.exp(-(dx * dx) / (2 * sx * sx) - (dy * dy) / (2 * sy * sy));
+
+/** Flat-topped bump: ~1 for |x| < r, then a fast shoulder. `p` sets the edge. */
+const superG = (x, r, p) => Math.exp(-Math.pow(Math.abs(x) / r, p));
+
+/** 1 inside [lo, hi], falling off over `soft` on either side. */
+const plateau = (x, lo, hi, soft) =>
+  smoothstep(lo - soft, lo + soft, x) * smoothstep(hi + soft, hi - soft, x);
+
 /** Wrap an angle into (-PI, PI]. */
 function wrapPi(a) {
   let t = a % (Math.PI * 2);
@@ -344,46 +354,123 @@ function addScute(mb, base, dir, sideAxis, size, w = 0.0) {
 
 // Six face variants. These are multipliers/offsets on top of the race's own
 // brow/jaw/snout so a "heavy" Blood Elf still reads as a Blood Elf.
+//
+// Every axis here has to survive a close-up, so the variants differ in feature
+// *shape* (nose length/width/hook, lip fullness, eye size and tilt) and not
+// only in the width of the skull.
 const FACE_VARIANTS = [
   // 0 balanced / heroic
-  { skullH: 1.00, jaw: 1.00, cheek: 1.00, hollow: 0.35, chin: 1.00, brow: 1.00, cranium: 1.00, eyeY: 0.05, eyeSpread: 1.00, nose: 1.00 },
-  // 1 narrow, fine-boned
-  { skullH: 1.07, jaw: 0.87, cheek: 0.70, hollow: 0.55, chin: 1.20, brow: 0.78, cranium: 0.93, eyeY: 0.08, eyeSpread: 0.93, nose: 0.82 },
-  // 2 heavy, square
-  { skullH: 0.94, jaw: 1.18, cheek: 1.30, hollow: 0.10, chin: 0.82, brow: 1.34, cranium: 1.07, eyeY: 0.03, eyeSpread: 1.07, nose: 1.22 },
-  // 3 gaunt, hollow-cheeked
-  { skullH: 1.04, jaw: 0.90, cheek: 1.45, hollow: 1.20, chin: 1.08, brow: 1.12, cranium: 0.90, eyeY: 0.07, eyeSpread: 0.97, nose: 0.94 },
-  // 4 round, soft
-  { skullH: 0.92, jaw: 1.06, cheek: 0.45, hollow: 0.00, chin: 0.76, brow: 0.66, cranium: 1.12, eyeY: 0.04, eyeSpread: 1.02, nose: 0.88 },
-  // 5 angular, sharp
-  { skullH: 1.02, jaw: 1.10, cheek: 1.35, hollow: 0.75, chin: 1.28, brow: 1.16, cranium: 0.95, eyeY: 0.06, eyeSpread: 1.05, nose: 1.12 }
+  { skullH: 1.00, jaw: 1.00, cheek: 1.00, hollow: 0.30, chin: 1.00, brow: 1.00, cranium: 1.00,
+    eyeY: 0.045, eyeSpread: 1.00, eyeSize: 1.00, eyeTilt: 0.00,
+    nose: 1.00, noseLen: 1.00, noseW: 1.00, noseHook: 0.00,
+    mouthW: 1.00, lip: 1.00, mouthY: 0.000 },
+  // 1 narrow, fine-boned, big-eyed
+  { skullH: 1.10, jaw: 0.82, cheek: 0.66, hollow: 0.55, chin: 1.22, brow: 0.70, cranium: 0.90,
+    eyeY: 0.070, eyeSpread: 0.92, eyeSize: 1.14, eyeTilt: 0.10,
+    nose: 0.76, noseLen: 0.88, noseW: 0.74, noseHook: -0.14,
+    mouthW: 0.86, lip: 1.10, mouthY: 0.022 },
+  // 2 heavy, square, brutal
+  { skullH: 0.92, jaw: 1.28, cheek: 1.28, hollow: 0.05, chin: 0.80, brow: 1.70, cranium: 1.10,
+    eyeY: 0.020, eyeSpread: 1.10, eyeSize: 0.80, eyeTilt: -0.08,
+    nose: 1.32, noseLen: 1.04, noseW: 1.34, noseHook: 0.16,
+    mouthW: 1.16, lip: 0.82, mouthY: -0.022 },
+  // 3 gaunt, hollow-cheeked, hawkish
+  { skullH: 1.06, jaw: 0.88, cheek: 1.50, hollow: 1.25, chin: 1.12, brow: 1.25, cranium: 0.88,
+    eyeY: 0.060, eyeSpread: 0.95, eyeSize: 0.86, eyeTilt: 0.03,
+    nose: 1.12, noseLen: 1.26, noseW: 0.80, noseHook: 0.32,
+    mouthW: 0.90, lip: 0.66, mouthY: 0.012 },
+  // 4 round, soft, wide
+  { skullH: 0.88, jaw: 1.08, cheek: 0.38, hollow: 0.00, chin: 0.70, brow: 0.52, cranium: 1.18,
+    eyeY: 0.030, eyeSpread: 1.05, eyeSize: 1.18, eyeTilt: 0.07,
+    nose: 0.82, noseLen: 0.80, noseW: 1.20, noseHook: -0.20,
+    mouthW: 1.08, lip: 1.34, mouthY: -0.030 },
+  // 5 angular, sharp, severe
+  { skullH: 1.03, jaw: 1.16, cheek: 1.42, hollow: 0.75, chin: 1.34, brow: 1.32, cranium: 0.94,
+    eyeY: 0.050, eyeSpread: 1.07, eyeSize: 0.86, eyeTilt: -0.11,
+    nose: 1.18, noseLen: 1.16, noseW: 0.90, noseHook: 0.06,
+    mouthW: 1.12, lip: 0.74, mouthY: 0.018 }
 ];
 
+/**
+ * The facial layout.
+ *
+ * Two different units are in play and mixing them up is the single easiest way
+ * to produce a face that is subtly wrong everywhere:
+ *
+ *   - VERTICAL positions (`eyeY`, `mouthY`, ...) are in `uy`, the parametric
+ *     height on the base ellipsoid, so they follow `skullH` — a longer skull
+ *     stretches the whole face with it.
+ *   - SIZES (every sigma, every lateral offset, every amplitude) are in head
+ *     radii R, and `headSurface` converts them. `ux` is *not* the same physical
+ *     length as `uy`: one ux is `rx` and one uy is `ry`, which differ by 40%.
+ */
 function headParams(F, faceIndex, headR, gaunt) {
   const fv = FACE_VARIANTS[faceIndex];
   const snout = sat(F.snout);
+  // How much of a flat humanoid face survives, and how much muzzle replaces it.
+  // The two crossfade, so an Orc (0.25) keeps a full nose and mouth pushed
+  // slightly forward while a Tauren (1.0) gets a real bovine muzzle.
+  const muzzle = smoothstep(0.30, 0.78, snout);
+  const flat = 1 - muzzle;
   // Broad bovine muzzle vs. narrow canine one vs. tapered draconic one.
   const snoutWidth = F.scales > 0.5 ? 0.74 : F.horns && snout > 0.6 ? 1.02 : 0.64;
+
+  // Landmark heights, in `uy`. These are the classical head proportions for a
+  // 230 mm skull mapped onto `ry = 1.05 R`: brow 103 mm below the crown, eye
+  // 117, nose tip 156, subnasale 169, stomion 188, pogonion 218.
+  const eyeY = fv.eyeY - 0.10 * muzzle;
+  const noseRootY = eyeY + 0.020;
+  const noseTipY = eyeY - 0.320 * fv.noseLen;
+  const noseBaseY = noseTipY - 0.105;
+  const snoutY = -0.14 - 0.12 * snout;
+  const humanMouthY = noseBaseY - 0.155 + fv.mouthY;
+
   return {
-    rx: headR * 0.92,
-    ry: headR * 1.14 * fv.skullH,
-    rz: headR * 1.00,
+    R: headR,
+    // A skull is much taller and deeper than it is wide. The old 0.92/1.14/1.00
+    // ellipsoid was within 25% of a sphere on every axis, which is most of why
+    // the head read as an egg before a single feature was carved into it.
+    rx: headR * 0.700,
+    ry: headR * 1.050 * fv.skullH,
+    rz: headR * 0.880,
+
     jaw: F.jaw * fv.jaw,
-    brow: F.brow * fv.brow + 0.07,
+    // Everyone gets a real supraorbital ridge: `F.brow` is 0 for Human, and a
+    // literal zero-amplitude brow ridge is a forehead, not a face.
+    brow: F.brow * fv.brow + 0.30,
     cheek: fv.cheek,
     hollow: fv.hollow + gaunt * 0.9,
     chin: fv.chin,
     cranium: fv.cranium,
+
+    eyeY,
+    browY: eyeY + 0.125,
+    eyeX: (0.315 + 0.075 * snout) * fv.eyeSpread,   // R units, from the midline
+    eyeTilt: fv.eyeTilt,
+    eyeSize: fv.eyeSize,
+    eyeR: headR * 0.115 * fv.eyeSize,
+    eyeSink: headR * 0.055 * fv.eyeSize,
+
+    flat,
+    muzzle,
+    nose: fv.nose,
+    noseW: fv.noseW,
+    noseHook: fv.noseHook,
+    noseRootY,
+    noseTipY,
+    noseBaseY,
+
+    mouthY: lerp(humanMouthY, snoutY - 0.17, muzzle),
+    mouthW: fv.mouthW * lerp(1, 1.75, muzzle),
+    lip: fv.lip,
+    chinY: lerp(humanMouthY - 0.245, snoutY - 0.42, muzzle),
+
     snout,
     snoutLen: headR * 1.05 * snout,
-    snoutY: -0.14 - 0.12 * snout,
+    snoutY,
     snoutSpread: 0.28 + 0.12 * snout,
     snoutWidth,
-    snoutDrop: -0.10 * snout,
-    nose: fv.nose * (1 - sat(snout * 1.6)),
-    eyeY: fv.eyeY,
-    eyeTheta: (0.40 + 0.34 * snout) * fv.eyeSpread,
-    eyeR: headR * 0.135
+    snoutDrop: -0.10 * snout
   };
 }
 
@@ -393,102 +480,255 @@ function headParams(F, faceIndex, headR, gaunt) {
  *
  * Local space: origin at the head centre, +Y up, +Z forward. theta = 0 faces
  * forward, phi = 0 is the crown.
+ *
+ * The important idea: features are placed in `(ux, uy)` — the orthographic
+ * projection of the unit sphere onto the face plane — and not in `(theta, phi)`
+ * with a `pow(front, k)` falloff. `front = sin(phi) cos(theta)` is a
+ * hemisphere-wide window: `pow(front, 3)` is still 0.35 at 45 degrees off the
+ * midline, so a "nose" written that way is just a forward inflation of the
+ * entire face. A gaussian in `(ux, uy)` is a *spot* two centimetres across, and
+ * spots are what a face is made of. Every one of them has to be gated by
+ * `faceM`, because `(ux, uy)` is symmetric front-to-back.
  */
 function headSurface(P, theta, phi) {
   const sp = Math.sin(phi);
   const cp = Math.cos(phi);
-  const st = Math.sin(theta);
-  const ct = Math.cos(theta);
+  const th = wrapPi(theta);
 
-  let x = P.rx * sp * st;
-  let y = P.ry * cp;
-  let z = P.rz * sp * ct;
+  const ux = sp * Math.sin(th); // lateral,  -1 .. 1
+  const uy = cp;                // vertical, +1 at the crown
+  const uz = sp * Math.cos(th); // depth,    +1 straight ahead
 
-  const yn = cp;                     // normalised height on the base sphere
-  const fr = sp * ct;                // -1 back .. +1 front
-  const front = Math.max(0, fr);
-  const back = Math.max(0, -fr);
-  const sideA = Math.abs(sp * st);
+  const R = P.R;
+  let x = P.rx * ux;
+  let y = P.ry * uy;
+  let z = P.rz * uz;
 
-  // Cranium: fuller above the ears, heavier occiput, pinched temples.
-  x *= 1 + 0.07 * P.cranium * smoothstep(0.05, 0.85, yn);
-  z *= 1 + 0.12 * back * smoothstep(-0.35, 0.70, yn);
-  x *= 1 - 0.05 * gauss(yn - 0.34, 0.16);
+  const sgn = ux < 0 ? -1 : 1;
+  const back = Math.max(0, -uz);
+  const faceM = smoothstep(-0.08, 0.40, uz);
 
-  // Jaw / chin. `jaw` widens the mandible band, the chin narrows and juts.
-  const jawBand = smoothstep(0.18, -0.50, yn);
-  x *= lerp(1, P.jaw, jawBand * 0.72);
-  const chinBand = smoothstep(-0.42, -0.92, yn);
-  x *= lerp(1, 0.58, chinBand);
-  z += P.rz * 0.22 * P.chin * chinBand * front;
+  // Feature geometry is quoted in head radii; these put the parameter
+  // coordinates into the same unit so a "10 mm" sigma is 10 mm in both axes.
+  // One ux is `rx` and one uy is `ry`, and those differ by 40% — writing
+  // lateral sigmas as though they were vertical ones is how the first pass
+  // ended up with a nose half the width of a real one.
+  const ax = Math.abs(ux) * (P.rx / R);   // lateral distance from the midline, in R
+  const kY = P.ry / R;                    // one uy, in R
+  const dY = (a, b) => (a - b) * kY;      // vertical distance, in R
 
-  // Zygomatic bulge with an optional hollow underneath it (gaunt races/faces).
-  const cheekW = gauss(yn + 0.06, 0.15) * (0.35 + 0.65 * front) * smoothstep(0.20, 0.85, sideA);
-  x *= 1 + 0.09 * P.cheek * cheekW;
-  const hollowW = gauss(yn + 0.30, 0.13) * (0.30 + 0.70 * front) * smoothstep(0.15, 0.80, sideA);
-  x *= 1 - 0.10 * P.hollow * hollowW;
-  z *= 1 - 0.05 * P.hollow * hollowW * front;
+  /* ---- gross skull shape --------------------------------------------------*/
+  // The cranium is a rounded box, not the top of an ellipsoid. A skull holds
+  // most of its width up to two thirds of its height and only then domes over;
+  // letting sin(phi) do the work gives the pointed egg this module started as.
+  const boxy = Math.pow(Math.max(sp, 0.24), -0.42);
+  const dome = smoothstep(0.02, 0.55, uy);
+  x *= lerp(1, boxy, dome);
+  z *= lerp(1, boxy, dome * 0.75);
 
-  // Brow ridge, and the socket shelf just beneath it.
-  const browW = gauss(yn - 0.22, 0.15) * Math.pow(front, 1.3);
-  z += P.rz * (0.05 + 0.27 * P.brow) * browW;
-  y += P.ry * 0.03 * P.brow * browW;
-  const socketW = gauss(yn - P.eyeY, 0.12) * Math.pow(front, 1.5);
-  z -= P.rz * (0.04 + 0.10 * P.brow) * socketW;
+  x *= 1 + 0.07 * P.cranium * gauss(uy - 0.34, 0.32);               // parietal
+  z *= 1 + 0.12 * P.cranium * back * smoothstep(-0.30, 0.65, uy);   // occiput
+  x *= 1 - 0.065 * gauss(uy - 0.30, 0.14) * faceM;                  // temples
+  z *= 1 - 0.055 * faceM * smoothstep(0.10, 0.72, uy);              // flat forehead
 
-  // Nose — only for flat-faced races; a muzzle replaces it entirely.
-  if (P.nose > 0.01) {
-    const nw = gauss(yn + 0.04, 0.11) * Math.pow(front, 3.0);
-    z += P.rz * 0.17 * P.nose * nw;
+  // The front of a skull is a flat plane running from the brow to the chin.
+  // `sin(phi)` has already fallen 40% by the time it reaches the chin, so
+  // leaving the facial plane on the ellipsoid drags the whole lower face
+  // backwards and flattens every feature carved into it into one smooth ramp —
+  // which is what a "featureless egg" actually is.
+  // The plate narrows as it descends — the dental arch curves back, so a
+  // uniform-width plane turns the mouth into a muzzle.
+  const planeR = lerp(0.30, 0.56, smoothstep(-0.78, 0.18, uy));
+  const planeW = faceM * gauss(ax, planeR) * plateau(uy, -0.86, 0.45, 0.25);
+  z *= lerp(1, Math.min(Math.pow(Math.max(sp, 0.30), -0.48), 1.45), planeW);
+
+  // Mandible. It has to stay at least as wide as the throat under it or the
+  // head reads as a light bulb sitting on a neck.
+  x *= 1 + 0.10 * P.jaw * gauss(uy - (P.chinY + 0.34), 0.20);
+  const taper = smoothstep(-0.38, -0.95, uy);
+  x *= lerp(1, 0.46, taper);
+  z *= lerp(1, 0.74, taper * back);
+
+  /* ---- eye sockets --------------------------------------------------------*/
+  // A bony orbit with two lid crescents around the aperture. The lids sit
+  // forward of the eyeball's silhouette, so they occlude it: that, and not the
+  // depth of the pit, is what stops the eye reading as a bead stuck on.
+  const es = P.eyeSize;
+  const eDx = ax - P.eyeX;
+  const eDy = dY(uy, P.eyeY) - P.eyeTilt * eDx;
+  const orbit = blob2(eDx, eDy, 0.190 * es, 0.150 * es) * faceM;
+  z -= R * 0.095 * orbit;
+  z += R * 0.048 * blob2(eDx, eDy - 0.100 * es, 0.170 * es, 0.052 * es) * faceM; // upper lid
+  z += R * 0.036 * blob2(eDx, eDy + 0.095 * es, 0.160 * es, 0.046 * es) * faceM; // lower lid
+
+  /* ---- brow ---------------------------------------------------------------*/
+  const browArc = dY(uy, P.browY) + 0.10 * Math.pow(sat(ax / 0.62), 2);
+  const browBar = gauss(browArc, 0.080) * superG(ax, 0.52, 6) * faceM;
+  z += R * (0.058 + 0.120 * P.brow) * browBar;
+  // Nasion. The root of the nose sits a good centimetre BEHIND the brow; without
+  // that notch the forehead, the bridge and the tip are one continuous slope and
+  // the nose stops existing in profile.
+  z -= R * 0.075 * blob2(ax, dY(uy, P.eyeY) - 0.045, 0.075, 0.080) * faceM;
+
+  /* ---- cheekbone, hollow, jaw angle --------------------------------------*/
+  const zyg = blob2(ax - 0.58, dY(uy, P.eyeY) + 0.20, 0.185, 0.145) * faceM;
+  x += R * 0.115 * P.cheek * zyg * sgn;
+  z += R * 0.085 * P.cheek * zyg;
+  const holl = blob2(ax - 0.52, dY(uy, P.eyeY) + 0.50, 0.170, 0.150) * faceM;
+  x -= R * 0.085 * P.hollow * holl * sgn;
+  z -= R * 0.045 * P.hollow * holl;
+  const gonial = blob2(ax - 0.56, dY(uy, P.chinY) - 0.34, 0.200, 0.160) * smoothstep(-0.55, 0.25, uz);
+  x += R * 0.130 * Math.max(0, P.jaw - 0.40) * gonial * sgn;
+
+  /* ---- nose ---------------------------------------------------------------*/
+  if (P.flat > 0.01) {
+    const f = P.flat * P.nose;
+    const t = sat((P.noseRootY - uy) / Math.max(1e-3, P.noseRootY - P.noseTipY));
+    const along =
+      smoothstep(P.noseRootY + 0.10, P.noseRootY - 0.03, uy) *
+      smoothstep(P.noseBaseY - 0.075, P.noseBaseY + 0.010, uy);
+    const wid = lerp(0.055, 0.115 * P.noseW, smoothstep(0.10, 0.95, t));
+    const h = lerp(0.010, 0.225, Math.pow(t, 0.8)) * (1 + 0.30 * P.noseHook * Math.sin(Math.PI * t));
+    z += R * h * f * gauss(ax, wid) * along * faceM;
+
+    // Wings.
+    z += R * 0.125 * P.noseW * f *
+      blob2(ax - 0.205 * P.noseW, dY(uy, P.noseBaseY) - 0.020, 0.085, 0.055) * faceM;
+
+    // The nostril undercut. Without a surface that falls away beneath the tip
+    // there is no shadow, and a nose with no shadow is invisible past arm's
+    // length no matter how far it sticks out.
+    const nos = blob2(ax - 0.115 * P.noseW, dY(uy, P.noseBaseY) + 0.030, 0.055, 0.035) * faceM;
+    z -= R * 0.115 * f * nos;
+    y -= R * 0.028 * f * nos;
+
+    // Philtrum.
+    z -= R * 0.030 * P.flat * blob2(ax, dY(uy, P.noseBaseY) + 0.085, 0.042, 0.060) * faceM;
+
+    // Nasolabial fold, from the wing of the nose down to the corner of the mouth.
+    const nlT = sat((P.noseBaseY - uy) / Math.max(1e-3, P.noseBaseY - (P.mouthY - 0.03)));
+    const nl =
+      gauss(ax - lerp(0.195, 0.310, nlT), 0.050) *
+      plateau(uy, P.mouthY - 0.045, P.noseBaseY + 0.010, 0.055) * faceM;
+    z -= R * 0.034 * (0.45 + 0.55 * sat(P.hollow)) * P.flat * nl;
   }
 
-  // Muzzle: a forward extrusion band that also carries the mandible with it.
+  /* ---- muzzle -------------------------------------------------------------*/
   if (P.snout > 0.01) {
-    const band = gauss(yn - P.snoutY, P.snoutSpread);
-    const w = band * Math.pow(front, 1.15);
+    const band = gauss(uy - P.snoutY, P.snoutSpread);
+    const w = band * Math.pow(Math.max(0, uz), 1.15);
     z += P.snoutLen * w;
     y += P.snoutDrop * w * P.ry;
-    x *= 1 - (1 - P.snoutWidth) * band * (0.35 + 0.65 * front);
-    x *= 1 + 0.14 * P.snoutWidth * band * Math.pow(front, 4.0); // squared-off tip
+    x *= 1 - (1 - P.snoutWidth) * band * (0.35 + 0.65 * Math.max(0, uz));
+    x *= 1 + 0.14 * P.snoutWidth * band * Math.pow(Math.max(0, uz), 4.0); // squared-off tip
+
+    // Rhinarium: a raised leather pad with two nostril pits, at the tip.
+    const padY = P.snoutY + 0.20;
+    z += R * 0.150 * P.muzzle * blob2(ax, dY(uy, padY), 0.190, 0.115) * faceM;
+    z -= R * 0.100 * P.muzzle * blob2(ax - 0.105, dY(uy, padY) + 0.060, 0.050, 0.036) * faceM;
   }
 
-  // Eye sockets, carved symmetrically about the facial midline.
-  const dth = Math.abs(wrapPi(theta)) - P.eyeTheta;
-  const ew = gauss(dth, 0.22) * gauss(yn - P.eyeY, 0.13);
-  x *= 1 - 0.06 * ew;
-  z *= 1 - 0.08 * ew;
+  /* ---- mouth --------------------------------------------------------------*/
+  // There was no mouth at all before this. A closed mouth is two lip volumes
+  // and, above all, the groove between them: it is four millimetres wide and it
+  // is the difference between a head and a face.
+  {
+    const mw = 0.185 * P.mouthW;
+    const across = superG(ax, mw, 4) * faceM;
+    const bow = dY(uy, P.mouthY) + 0.035 * Math.pow(sat(ax / mw), 2);
+    z += R * 0.072 * P.lip * gauss(bow - 0.058, 0.045) * across;   // upper lip
+    z += R * 0.080 * P.lip * gauss(bow + 0.065, 0.050) * across;   // lower lip
+    const line = gauss(bow, 0.026) * across;
+    z -= R * 0.100 * line;
+    y -= R * 0.012 * line;
+    z -= R * 0.042 * blob2(ax - mw * 0.94, bow, 0.050, 0.036) * faceM;  // corners
+    z -= R * 0.070 * gauss(bow + 0.160, 0.050) * across;                // mentolabial
+  }
 
-  // The bottom of the skull is not a pole — it is a stump that plugs the neck.
-  const stump = smoothstep(-0.55, -1.0, yn);
-  x *= lerp(1, 0.42, stump);
-  z = lerp(z, z * 0.42 - P.rz * 0.06, stump);
-  y = lerp(y, -P.ry * 0.56, stump * 0.92);
+  /* ---- chin ---------------------------------------------------------------*/
+  const chinB = blob2(ax, dY(uy, P.chinY), 0.185, 0.120) * faceM;
+  z += R * 0.185 * P.chin * chinB;
+  y -= R * 0.022 * P.chin * chinB;
+  // Submental shelf: the underside of the chin has to fall away or the jaw and
+  // the throat merge into one column.
+  z -= R * 0.070 * blob2(ax, dY(uy, P.chinY) + 0.190, 0.230, 0.090) * faceM;
+
+  /* ---- neck stump ---------------------------------------------------------*/
+  // The bottom of the skull is not a pole, it is a stump that plugs the neck.
+  // The neck is BEHIND the jaw, so the axis it collapses along is tilted back:
+  // driving it off `uy` alone (as the first version did) swallows the chin, the
+  // mouth and the whole lower third of the face.
+  const sv = uy * 0.90 + uz * 0.44;
+  const stump = smoothstep(-0.70, -0.99, sv);
+  x *= lerp(1, 0.34, stump);
+  z = lerp(z, -P.rz * 0.10, stump);
+  y = lerp(y, -P.ry * 0.86, stump * 0.85);
 
   return V3(x, y, z);
 }
 
+/**
+ * `n + 1` monotone parameter samples in [0, 1] whose spacing is inversely
+ * proportional to `density`. The head grid spends four to five times as many
+ * rows and columns on the face as on the back of the skull, because a lip
+ * groove and a nostril undercut are 3-5 mm features on a 24 cm head and a
+ * uniform grid fine enough to resolve them costs three times the triangles.
+ */
+function densitySamples(n, density) {
+  const M = 512;
+  const cum = new Float64Array(M + 1);
+  for (let i = 0; i < M; i++) cum[i + 1] = cum[i] + Math.max(1e-3, density((i + 0.5) / M));
+  const total = cum[M];
+  const out = new Float64Array(n + 1);
+  let i = 0;
+  for (let k = 0; k <= n; k++) {
+    const target = (k / n) * total;
+    while (i < M - 1 && cum[i + 1] < target) i++;
+    const seg = cum[i + 1] - cum[i] || 1;
+    out[k] = clamp((i + (target - cum[i]) / seg) / M, 0, 1);
+  }
+  out[0] = 0;
+  out[n] = 1;
+  return out;
+}
+
 function buildHead(mb, P) {
-  const LAT = 40;
-  const LON = 52;
+  const LAT = 104;
+  const LON = 88;
+
+  const tV = densitySamples(LAT, (t) => {
+    const uy = Math.cos(t * Math.PI);
+    return 1 + 4.6 * gauss(uy + 0.26, 0.38) + 1.0 * gauss(uy - 0.45, 0.22);
+  });
+  const sU = densitySamples(LON, (s) => 1 + 4.2 * gauss(s - 0.5, 0.155));
+  // Force exact left/right symmetry. `src/materials/skin.js` keys its facial
+  // masks off local u = 0.5 being dead on the face front, and the warp must not
+  // drift it.
+  for (let j = 0; j <= LON >> 1; j++) {
+    const m = 0.5 * (sU[j] + (1 - sU[LON - j]));
+    sU[j] = m;
+    sU[LON - j] = 1 - m;
+  }
+
   const grid = [];
   for (let i = 0; i <= LAT; i++) {
-    const phi = (i / LAT) * Math.PI;
+    const phi = tV[i] * Math.PI;
+    const uy = Math.cos(phi);
     const row = [];
     for (let j = 0; j <= LON; j++) {
       const jj = j === LON ? 0 : j;
-      const theta = Math.PI + (Math.PI * 2 * jj) / LON;
+      const theta = Math.PI + Math.PI * 2 * sU[jj];
       const p = headSurface(P, theta, phi);
-      // Freeze the face so smoothing cannot erase brow/muzzle detail; relax the
-      // cranium and the neck stump a little.
-      const yn = Math.cos(phi);
-      const front = Math.max(0, Math.sin(phi) * Math.cos(theta));
-      // Relax the cranium a little, freeze the face, and freeze the neck stump
-      // (its pole fan would otherwise collapse into degenerate triangles).
+      const uz = Math.sin(phi) * Math.cos(wrapPi(theta));
+      // The whole front of the skull is frozen. The relax pass exists for the
+      // ear / horn / tusk junctions; three umbrella iterations at 0.55 would
+      // take a 4 mm lip groove straight back out again.
       const w =
-        lerp(0.35, 0.0, sat(front * 1.4)) *
-        smoothstep(0.95, 0.2, yn) *
-        smoothstep(-0.98, -0.60, yn);
-      row.push(mb.vert(p, j / LON, 1 - i / LAT, w));
+        0.26 *
+        smoothstep(0.10, -0.35, uz) *
+        smoothstep(0.99, 0.45, uy) *
+        smoothstep(-0.999, -0.90, uy);
+      row.push(mb.vert(p, sU[j], 1 - tV[i], w));
     }
     grid.push(row);
   }
@@ -615,14 +855,18 @@ function buildEars(mb, kind, P, headR) {
         }
         break;
       case 'human':
-      default: // small shell, tucked against the skull
+      default:
+        // A tall thin shell tucked against the skull. Swept laterally, the loft
+        // frame puts `r` front-to-back and `r * aspect` vertical, so the aspect
+        // has to be > 1 to get an ear that is taller than it is deep.
         keys = [
-          root,
-          root.clone().add(V3(side * 0.10 * R, 0.06 * R, -0.10 * R)),
-          root.clone().add(V3(side * 0.14 * R, -0.14 * R, -0.20 * R))
+          root.clone().add(V3(0, 0.02 * R, -0.02 * R)),
+          root.clone().add(V3(side * 0.09 * R, 0.00 * R, -0.06 * R)),
+          root.clone().add(V3(side * 0.15 * R, -0.05 * R, -0.12 * R))
         ];
-        rad = [[0, R * 0.17], [0.4, R * 0.20], [1, R * 0.09]];
-        asp = [[0, 0.55], [1, 0.40]];
+        rad = [[0, R * 0.11], [0.4, R * 0.14], [0.78, R * 0.13], [1, R * 0.05]];
+        asp = [[0, 1.55], [0.45, 2.05], [1, 1.70]];
+        radial = 12;
         break;
     }
 
@@ -920,8 +1164,8 @@ export function buildBodyGeometry(build, features, opts = {}) {
 
   // --- torso / neck skeleton -------------------------------------------------
   const neckLen = Math.max(headR * 0.16, headR * 0.95 * B.neck);
-  const headCentreYNom = H - headR * 1.14;
-  const torsoLen = Math.max(H * 0.16, headCentreYNom - headR * 0.62 - neckLen - hipY);
+  const headCentreYNom = H - headR * 1.05;
+  const torsoLen = Math.max(H * 0.16, headCentreYNom - headR * 0.68 - neckLen - hipY);
 
   // Tangent angle away from vertical, integrated up the spine. The hunch is
   // amplified over the raw posture value because a 200px silhouette needs the
@@ -1262,8 +1506,9 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const neckEnd = torsoPath[torsoPath.length - 1];
   const topAngle = spineAng[SPINE_SEGS] * 0.45;
   const headDir = V3(0, Math.cos(topAngle), Math.sin(topAngle));
-  // Seat the skull so its neck stump sinks well into the throat column.
-  const headCentre = neckEnd.clone().addScaledVector(headDir, P.ry * 0.40 + neckR * 0.12);
+  // Seat the skull so its neck stump sinks into the throat column — but not so
+  // deep that the jaw and chin are buried in the front of the neck.
+  const headCentre = neckEnd.clone().addScaledVector(headDir, P.ry * 0.58 + neckR * 0.14);
   const headQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(topAngle * 0.9, 0, 0));
   const headM = new THREE.Matrix4().compose(headCentre, headQuat, V3(1, 1, 1));
 
@@ -1290,11 +1535,16 @@ export function buildBodyGeometry(build, features, opts = {}) {
   // Eye frames, scalp and head axes are computed on the analytic surface before
   // the assembly is transformed, so they land exactly in their sockets.
   const eyePhi = Math.acos(clamp(P.eyeY, -0.95, 0.95));
+  const eyeUx = (P.eyeX * headR) / P.rx;
+  const eyeTheta = Math.asin(clamp(eyeUx / Math.max(1e-3, Math.sin(eyePhi)), -0.999, 0.999));
   const eyeLocals = [];
   for (const side of [-1, 1]) {
-    const s = headSurface(P, side * P.eyeTheta, eyePhi);
-    const dir = V3(s.x / P.rx, 0.14, s.z / P.rz).normalize().lerp(V3(0, 0, 1), 0.30).normalize();
-    eyeLocals.push({ p: s.clone().addScaledVector(dir, -P.eyeR * 0.55), dir, side });
+    const s = headSurface(P, side * eyeTheta, eyePhi); // the floor of the orbit
+    const dir = V3(s.x / P.rx, 0.12, s.z / P.rz).normalize().lerp(V3(0, 0, 1), 0.50).normalize();
+    // Set back behind the aperture so the lid crescents overhang the ball and
+    // only the cap between them shows. The old code pushed it INTO a 5 mm
+    // dimple, which is why the eyes read as beads sitting on the skin.
+    eyeLocals.push({ p: s.clone().addScaledVector(dir, -P.eyeSink), dir, side });
   }
   const scalpLocal = headSurface(P, 0, 0.30);
 
