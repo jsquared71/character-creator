@@ -2,9 +2,23 @@
 // MeshPhysicalMaterial.
 //
 // The geometry side (character/hair.js) builds an InstancedMesh of tapered
-// ribbon cards laid over the scalp. One card is not one hair: the baked
-// strand card texture puts several fine tapered strands across the quad, so a
-// few hundred instances read as a full head of hair.
+// ribbon cards laid over the scalp. One card is not one hair: the baked strand
+// card texture puts a dozen or so fine hairs across the ribbon, so a few
+// hundred instances read as a full head of hair.
+//
+// THE CONTRACT WITH character/hair.js — both halves have to agree on this or
+// the hair falls apart into fragments:
+//
+//   * U runs across the ribbon's face, 0 and 1 on its two long edges. The
+//     geometry mirrors U over the card's closed cross-section to make that
+//     true, so both edges get the feathered border this file bakes.
+//   * V runs root-to-tip *of one card*, and a card is one link in a chain of
+//     them. So the card map must TILE in V — nothing may begin or end inside
+//     it. Root-to-tip behaviour belongs to the strand, not the card.
+//   * aStrandSpan (vec2, per instance) is the card's slice of its whole
+//     strand. `vHairRoot` interpolates it, and every root-to-tip term below —
+//     root darkening, tip fray, fibre-noise phase, specular masking — is
+//     driven from that rather than from the card's own uv.y.
 //
 // Shading:
 //   - Two shifted Kajiya-Kay specular lobes along the strand tangent. The
@@ -16,7 +30,10 @@
 //     the instance's local +Y axis as a degenerate-case fallback.
 //   - No depth-sorted alpha is available, so the cutout is a hashed/dithered
 //     alpha test (alphaTest > 0, transparent false, alphaToCoverage on so it
-//     upgrades to real coverage AA wherever the target is multisampled).
+//     upgrades to real coverage AA wherever the target is multisampled — the
+//     composer's targets are not, so treat the threshold as a hard clip and
+//     keep it low; softness has to come from the width of the card map's
+//     falloff, not from the test).
 //   - Root-to-tip: darker and rougher at the root, lighter and shinier at the
 //     tip; per-instance aStrandSeed / aStrandTint vary tint and roughness so
 //     the hair mass has internal depth.
@@ -73,7 +90,7 @@ function clamp01(x) {
 // Baked maps
 // ---------------------------------------------------------------------------
 
-// Several fine tapered strands across one card, soft at the ends.
+// A dozen or so fine hairs across one card, feathered on both long edges.
 //   r = strand core mask (used to keep the specular on the hair, not the gap)
 //   g = alpha            (alphaMap samples .g — also drives the shadow cutout)
 //   b = per-strand id    (breaks the strands apart in tint)
@@ -113,7 +130,7 @@ const CARD_FRAG = /* glsl */ `
     float wander = sin((v * turns + r3) * 6.2831853) * uWave;
     float cx = slot + (r1 - 0.5) * (0.9 / uCount) + wander;
 
-    float w = (0.5 / uCount) * mix(0.36, 0.86, r3) * uThick;
+    float w = (0.5 / uCount) * mix(0.42, 0.94, r3) * uThick;
 
     float d = abs(u - cx);
     // Wide feathered shoulders. The cutout is a hard alpha test, so the only

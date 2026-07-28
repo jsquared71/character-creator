@@ -14,9 +14,19 @@ import * as THREE from 'three';
  *
  * Everything — scalp hair, mohawk crests, topknot plumes, twin tails, braids,
  * Tauren manes, Dwarf beards — lands in the *same* InstancedMesh, using the
- * material handed in by the caller. Per-instance `aStrandSeed` and
- * `aStrandTint` instanced attributes let that material break up tint and
- * shading per lock.
+ * material handed in by the caller. Per-instance `aStrandSeed`, `aStrandTint`
+ * and `aStrandSpan` instanced attributes let that material break up tint and
+ * shading per lock, and tell it where each card sits inside its strand.
+ *
+ * Two things this file has to get right, both of which are invisible in
+ * isolation and catastrophic in the render (see the long comments at
+ * `scalpFrame` and `createCardGeometry`):
+ *
+ *   1. The head is a triaxial dome, not a sphere of `head.radius`. Roots
+ *      placed on a sphere sink into the skin over the crown and the hair
+ *      disappears there.
+ *   2. The card's UV convention is a contract with materials/hair.js: U across
+ *      the ribbon face, V tiling from card to card along a chain.
  *
  *   buildHairGeometry(race, features, joints, { styleIndex, material })
  *     -> THREE.InstancedMesh | null
@@ -298,7 +308,7 @@ function skullOf(ctx, inflate) {
 const STYLES = [
   {
     id: 'long', name: 'Long Flowing',
-    strands: 120, length: 4.2, segs: 7, gravity: 0.62, stiff: 0.16, outward: 0.22,
+    strands: 132, length: 3.3, segs: 6, gravity: 0.62, stiff: 0.16, outward: 0.22,
     noise: 0.09, curl: 0.06, width: 0.32, thetaFront: 1.02, thetaBack: 2.10,
     cap: 1.0, flow: 0.38, part: 0.42, fringe: 0.30
   },
@@ -688,15 +698,15 @@ function tintFor(ctx) {
 function emitCapLayer(ctx) {
   const { style, profile, rng, R } = ctx;
   if (!style.cap) return;
-  // THREE CROSSED PASSES. A card lying flat on the scalp is a plate whose
+  // CROSSED PASSES. A card lying flat on the scalp is a plate whose
   // normal is the scalp normal, so it hides scalp well when you look straight
   // at it and hides almost nothing when you look along it. Every cap card
   // following the same flow field means they all foreshorten *together* — at
   // the crown, seen from the front, the whole layer collapses to a set of thin
   // lines and the skin comes through between them. Fanning the passes across
   // the flow guarantees that from any angle one pass is still presenting area.
-  const n = Math.round(44 * style.cap * clamp(profile.density, 0.5, 1.4));
-  const fan = [0, 1.15, -1.15];
+  const n = Math.round(40 * style.cap * clamp(profile.density, 0.5, 1.4));
+  const fan = [0, 1.15, -1.15, 2.55];
   const dir = new THREE.Vector3();
   const nrm = new THREE.Vector3();
   const root = new THREE.Vector3();
@@ -705,7 +715,7 @@ function emitCapLayer(ctx) {
   for (let pass = 0; pass < fan.length; pass++) {
     for (let i = 0; i < n; i++) {
       const u = (i + 0.5) / n;
-      const theta = Math.acos(1 - u * 0.98) * (0.98 + pass * 0.045);
+      const theta = Math.acos(1 - u * 0.98) * (0.97 + pass * 0.035);
       const phi = i * 2.399963 + pass * 1.17 + rng() * 0.35;
       if (!acceptRoot(ctx, theta, phi, -0.10)) continue;
       domePoint(ctx.frame, theta, phi, dir);
@@ -729,12 +739,12 @@ function emitCapLayer(ctx) {
       d0.addScaledVector(nrm, 0.24);
       const pts = growStrand(rng, root, d0, P);
       pushStrand(ctx, pts, {
-        width: strandWidth(ctx, 1.55 - pass * 0.12),
+        width: strandWidth(ctx, 1.60 - pass * 0.10),
         tint: clamp01(tintFor(ctx) * (0.70 + pass * 0.06)),
         seed: rng(),
         twist: (rng() - 0.5) * 0.35,
         face: nrm.clone(),
-        priority: 4 - pass * 0.5
+        priority: 4 - pass * 0.25
       });
     }
   }
@@ -793,9 +803,12 @@ function emitScalp(ctx) {
         .addScaledVector(inward, 0.35).normalize();
       driftAmt = 0.36 * style.sweep;
     } else {
-      driftVec = inward.clone().multiplyScalar(0.8)
-        .addScaledVector(fwd, -0.45).normalize();
-      driftAmt = 0.16;
+      // Only a gentle pull toward the body. Hair has nothing to collide with
+      // below the skull, so a strong inward drift walks long locks straight
+      // into the torso mesh, where they cost instances and render nothing.
+      driftVec = inward.clone().multiplyScalar(0.28)
+        .addScaledVector(fwd, -0.30).normalize();
+      driftAmt = 0.12;
     }
 
     if (clumps.length) {
