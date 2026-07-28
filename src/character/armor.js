@@ -594,27 +594,30 @@ function buildChest(ctx) {
   // collar / gorget
   if (T.collar > 0.2) {
     const top = M.frameAt(0.995);
-    const cr = M.neckR * (isCloth ? 1.50 : 1.30) + off;
-    const ch = M.neckR * (isCloth ? 1.5 : 0.9) * T.collar;
+    // base hugs the trapezius ring, then tapers in to the neck and flares
+    const crBase = Math.max(M.neckR * 1.30, M.torsoR(1.0) * 0.86) + off;
+    const crTop = M.neckR * (isCloth ? 1.60 : 1.24) + off;
+    const ch = M.neckR * (isCloth ? 2.30 : 1.35) * T.collar;
     const frames = [];
     const rowsC = 5;
     for (let i = 0; i <= rowsC; i++) {
       const t = i / rowsC;
       frames.push({
-        p: top.p.clone().addScaledVector(top.up, ch * t - ch * 0.15),
+        p: top.p.clone().addScaledVector(top.up, ch * t - ch * 0.10),
         x: top.right.clone(), y: top.fwd.clone(), t: top.up.clone()
       });
     }
+    const aspTop = M.torsoAspect(1.0) * 1.12;
     const collar = surface(16, rowsC, (uu, vv, out) => {
       const f = frames[Math.round(vv * rowsC)];
       const th = TAU * uu + Math.PI * 0.5;
-      const flareC = 1 + (isCloth ? 0.50 : 0.22) * Math.pow(vv, 2);
-      const dip = 1 - 0.35 * Math.max(0, Math.sin(th)) * vv;   // open at the throat
-      const r = cr * flareC * dip;
+      const flareC = 1 + (isCloth ? 0.55 : 0.20) * Math.pow(vv, 2.2);
+      const dip = 1 - 0.32 * Math.max(0, Math.sin(th)) * vv;   // open at the throat
+      const r = lerp(crBase, crTop, smooth(vv)) * flareC * dip;
       out.set(
-        f.p.x + f.x.x * r * Math.cos(th) + f.y.x * r * M.depth * 1.15 * Math.sin(th),
-        f.p.y + f.x.y * r * Math.cos(th) + f.y.y * r * M.depth * 1.15 * Math.sin(th) + top.up.y * 0,
-        f.p.z + f.x.z * r * Math.cos(th) + f.y.z * r * M.depth * 1.15 * Math.sin(th)
+        f.p.x + f.x.x * r * Math.cos(th) + f.y.x * r * aspTop * Math.sin(th),
+        f.p.y + f.x.y * r * Math.cos(th) + f.y.y * r * aspTop * Math.sin(th),
+        f.p.z + f.x.z * r * Math.cos(th) + f.y.z * r * aspTop * Math.sin(th)
       );
     }, { closedU: true, flat: T.flat, trim: (uu, vv) => Math.max(0.25, smooth(vv * 1.4)) });
     part.add(collar);
@@ -623,20 +626,20 @@ function buildChest(ctx) {
   // leather / mail get a crossed harness; plate gets a sternum boss
   if (A.tier === 'leather' || isMail) {
     for (const s of [1, -1]) {
-      const a = M.frameAt(0.86), c = M.frameAt(0.22);
       const pts = [];
       for (let i = 0; i <= 6; i++) {
         const t = i / 6;
-        const f = M.frameAt(lerp(0.86, 0.22, t));
+        const ts = lerp(0.86, 0.22, t);
+        const f = M.frameAt(ts);
         const th = Math.PI * 0.5 + s * lerp(0.15, 0.95, t);
-        const w = profile(lerp(1, 0, t), wCtrl) + off * 1.9;
+        const w = M.torsoR(ts) + off * 2.4;
+        const d = M.torsoR(ts) * M.torsoAspect(ts) + off * 2.0;
         pts.push(V3(
-          f.p.x + f.right.x * w * Math.cos(th) + f.fwd.x * w * M.depth * Math.sin(th),
-          f.p.y + f.right.y * w * Math.cos(th) + f.fwd.y * w * M.depth * Math.sin(th),
-          f.p.z + f.right.z * w * Math.cos(th) + f.fwd.z * w * M.depth * Math.sin(th)
+          f.p.x + f.right.x * w * Math.cos(th) + f.fwd.x * d * Math.sin(th),
+          f.p.y + f.right.y * w * Math.cos(th) + f.fwd.y * d * Math.sin(th),
+          f.p.z + f.right.z * w * Math.cos(th) + f.fwd.z * d * Math.sin(th)
         ));
       }
-      void a; void c;
       const strap = sweep(framesAlong(pts, V3(0, 1, 0)), roundRect(0.055 * u, 0.014 * u, 0.005 * u), {
         capStart: true, capEnd: true, trim: () => 0.35, scale: (t) => [lerp(1, 0.8, t), 1]
       });
@@ -645,7 +648,7 @@ function buildChest(ctx) {
   } else if (A.tier === 'plate') {
     const f = M.frameAt(0.70);
     const boss = new THREE.SphereGeometry(M.chestW * 0.22, 10, 7, 0, TAU, 0, Math.PI * 0.55);
-    const p = f.p.clone().addScaledVector(f.fwd, (M.chestW + off) * M.depth * 1.02);
+    const p = f.p.clone().addScaledVector(f.fwd, M.torsoR(0.70) * M.torsoAspect(0.70) * 1.03 + off);
     const m = trs(p, new THREE.Euler(Math.PI * 0.5, 0, 0), V3(1, 1, 0.55));
     part.add(facet(boss), m, 1.0);
   }
@@ -664,8 +667,8 @@ function buildBelt(ctx) {
   const T = TIER_SHAPE[A.tier] || TIER_SHAPE.plate;
   const t = M.tAtY(M.hipsPos.y + M.hipR * 0.20);
   const f = M.frameAt(t);
-  const rw = M.hipW * 1.06 + T.offset * u * 1.25;
-  const rd = rw * M.depth * 1.04;
+  const rw = M.torsoR(t) * 1.03 + T.offset * u * 1.25;
+  const rd = M.torsoR(t) * M.torsoAspect(t) * 1.03 + T.offset * u * 1.10;
   const h = M.hipR * (A.tier === 'plate' ? 0.52 : 0.38);
   const thick = 0.020 * u;
 
@@ -720,7 +723,11 @@ function buildSkirt(ctx) {
 
 function hipFrame(M) {
   const t = M.tAtY(M.hipsPos.y + M.hipR * 0.05);
-  return M.frameAt(t);
+  const f = M.frameAt(t);
+  f.t = t;
+  f.rw = M.torsoR(t);
+  f.rd = M.torsoR(t) * M.torsoAspect(t);
+  return f;
 }
 
 /** Warrior / Death Knight: hanging plate strips that splay outward as they fall. */
@@ -729,8 +736,8 @@ function skirtTasset(ctx) {
   const part = new Part('tasset');
   const u = M.u;
   const f = hipFrame(M);
-  const rw = M.hipW * 1.05 + 0.030 * u;
-  const rd = rw * M.depth * 1.02;
+  const rw = f.rw * 1.04 + 0.030 * u;
+  const rd = f.rd * 1.04 + 0.026 * u;
   const drop = M.H * (A.pauldron === 'skulled' ? 0.20 : 0.17);
   const count = 10;
   const trimFn = trimFor(A.trim);
@@ -790,7 +797,7 @@ function skirtTabard(ctx) {
   const trimFn = trimFor(A.trim);
   const top = M.hipsPos.y + M.hipR * 0.55;
   const len = M.H * 0.30;
-  const halfW = M.hipW * 0.78;
+  const halfW = f.rw * 0.80;
 
   for (const s of [1, -1]) {
     const panel = surface(7, 10, (uu, vv, out) => {
@@ -819,8 +826,8 @@ function skirtBelted(ctx) {
   const part = new Part('belted');
   const u = M.u;
   const f = hipFrame(M);
-  const rw = M.hipW * 1.03 + 0.016 * u;
-  const rd = rw * M.depth;
+  const rw = f.rw * 1.03 + 0.016 * u;
+  const rd = f.rd * 1.03 + 0.014 * u;
   const n = 7;
   for (let i = 0; i < n; i++) {
     const th = Math.PI * 0.5 + (i / (n - 1) - 0.5) * 2.4 + (rand() - 0.5) * 0.12;
@@ -881,8 +888,9 @@ function skirtRobe(ctx) {
   const trimFn = trimFor(A.trim);
   const slit = A.pauldron === 'horned' ? 0.55 : 0.0;   // warlock robe splits at the front
 
-  const rTop = M.hipW * 1.05 + 0.022 * u;
-  const rHem = M.hipW * (2.05 + (M.digitigrade ? 0.15 : 0));
+  const asp = lerp(f.rd / Math.max(1e-6, f.rw), 1.0, 0.45);
+  const rTop = f.rw * 1.04 + 0.022 * u;
+  const rHem = M.torsoR(0.07) * (2.05 + (M.digitigrade ? 0.15 : 0));
 
   const robe = surface(28, 12, (uu, vv, out) => {
     const th = TAU * uu + Math.PI * 0.5;
@@ -895,9 +903,9 @@ function skirtRobe(ctx) {
     const front = Math.max(0, Math.sin(th));
     const cut = slit * Math.pow(front, 6) * vv;
     out.set(
-      f.p.x + f.right.x * r * Math.cos(th) + f.fwd.x * r * M.depth * 1.06 * Math.sin(th) * (1 - cut * 0.5),
+      f.p.x + f.right.x * r * Math.cos(th) + f.fwd.x * r * asp * Math.sin(th) * (1 - cut * 0.5),
       y + cut * M.H * 0.16,
-      f.p.z + f.right.z * r * Math.cos(th) + f.fwd.z * r * M.depth * 1.06 * Math.sin(th) * (1 - cut * 0.5)
+      f.p.z + f.right.z * r * Math.cos(th) + f.fwd.z * r * asp * Math.sin(th) * (1 - cut * 0.5)
     );
   }, {
     closedU: true,
@@ -917,8 +925,8 @@ function skirtSash(ctx) {
   const part = new Part('sash');
   const u = M.u;
   const f = hipFrame(M);
-  const rw = M.hipW * 1.05 + 0.014 * u;
-  const rd = rw * M.depth;
+  const rw = f.rw * 1.04 + 0.014 * u;
+  const rd = f.rd * 1.04 + 0.012 * u;
   const h = M.hipR * 0.9;
   const trimFn = trimFor(A.trim);
 
@@ -935,7 +943,7 @@ function skirtSash(ctx) {
   part.add(band);
 
   // knot
-  const knotP = f.p.clone().addScaledVector(f.fwd, rd * 1.02).addScaledVector(f.right, -M.hipW * 0.42);
+  const knotP = f.p.clone().addScaledVector(f.fwd, rd * 1.02).addScaledVector(f.right, -f.rw * 0.42);
   const knot = new THREE.SphereGeometry(M.hipR * 0.22, 8, 6);
   part.add(knot, trs(knotP, new THREE.Euler(0, 0, 0.5), V3(1.3, 0.85, 0.8)), 0.5);
 
@@ -1107,7 +1115,7 @@ function buildCape(ctx) {
   const trimFn = trimFor(A.trim);
   const top = M.frameAt(0.94);
   const anchorY = Math.min(M.shoulderY - M.shoulderR * 0.25, top.p.y);
-  const backZ = top.p.z - M.chestW * M.depth * 0.92 - 0.012 * u;
+  const backZ = top.p.z - (M.torsoR(0.92) * M.torsoAspect(0.92) * M.torsoBack(0.92) + M.hump(0.92, 1)) - 0.022 * u;
 
   const tattered = A.tier === 'cloth';
   const short = A.tier === 'leather';
@@ -1130,7 +1138,7 @@ function buildCape(ctx) {
     const away = 0.075 * u + M.H * 0.055 * Math.pow(smooth(vv), 1.6);
     const folds = Math.sin(uu * TAU * 3.0 + vv * 1.2) * 0.020 * u * smooth(vv * 1.6);
     const y = anchorY - len * vv2 + Math.abs(x) * 0.06 * (1 - vv);
-    const z = backZ - curl * M.chestW * 0.55 * (1 - 0.55 * smooth(vv)) - away * (0.4 + 0.6 * vv) + folds;
+    const z = backZ - curl * M.chestW * 0.50 * (1 - 0.55 * smooth(vv)) - away * (0.4 + 0.6 * vv) + folds;
     out.set(top.p.x + x, y, z);
   }, {
     flip: true,
