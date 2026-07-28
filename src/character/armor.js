@@ -1007,8 +1007,9 @@ function buildBoots(ctx) {
   for (const f of M.feet) {
     const soleY = Math.max(0, f.p.y - 0.01 * u);
     const footLen = M.H * 0.135 * (0.85 + 0.20 * M.legThick);
-    const footW = M.H * 0.052 * M.legThick + T.offset * u;
-    const ankleH = M.H * 0.055 * (hoof ? 1.25 : 1.0);
+    // half-width of the boot; every radius below is a true radius
+    const footW = M.H * 0.027 * lerp(1, M.legThick, 0.6) + T.offset * u * 0.30;
+    const ankleH = M.H * 0.050 * (hoof ? 1.15 : 1.0);
     const shaftTop = soleY + M.H * (A.tier === 'cloth' ? 0.075 : hoof ? 0.10 : 0.16) * (0.85 + 0.3 * M.legThick);
 
     if (!hoof) {
@@ -1020,7 +1021,8 @@ function buildBoots(ctx) {
       const foot = sweep(framesAlong(fr, V3(1, 0, 0)), roundRect(1, 1, 0.28), {
         capStart: true, capEnd: true,
         scale: (t) => {
-          const w = footW * profile(t, [[0, 0.72], [0.30, 1.0], [0.72, 1.0], [1, 0.62]]);
+          // section is a unit rounded rect (half-extent 0.5), so pass full sizes
+          const w = 2 * footW * profile(t, [[0, 0.72], [0.30, 1.0], [0.72, 1.0], [1, 0.62]]);
           const hgt = ankleH * profile(t, [[0, 1.25], [0.35, 0.95], [0.75, 0.72], [1, 0.48]]);
           return [w, hgt];
         },
@@ -1039,8 +1041,8 @@ function buildBoots(ctx) {
       const t = i / sSteps;
       pts.push(V3(f.p.x, lerp(ankleY, shaftTop, t), f.p.z + (hoof ? 0.01 * u : -footLen * 0.06 * t)));
     }
-    const rBase = footW * (hoof ? 1.05 : 0.98);
-    const rTop = footW * (A.tier === 'plate' ? 1.32 : A.tier === 'cloth' ? 1.45 : 1.12);
+    const rBase = footW * (hoof ? 1.10 : 0.92);
+    const rTop = footW * (A.tier === 'plate' ? 1.34 : A.tier === 'cloth' ? 1.48 : 1.14);
     const shaft = sweep(framesAlong(pts, V3(1, 0, 0)), ellipse(12, 1, 1.06), {
       capStart: false, capEnd: false,
       scale: (t) => {
@@ -1388,13 +1390,13 @@ function pauldronFloating(part, S, ctx, trimFn) {
       S * (0.45 + 1.25 * t) + Math.sin(i * 2.1) * S * 0.12,
       rad * 0.80 * Math.sin(a)
     );
-    const g = new THREE.OctahedronGeometry(S * (0.34 - 0.11 * t), 0);
+    const g = new THREE.OctahedronGeometry(S * (0.46 - 0.13 * t), 0);
     const e = new THREE.Euler(rand() * TAU, rand() * TAU, rand() * TAU);
-    part.add(facet(g), trs(p, e, V3(0.42, 1.55 - 0.35 * t, 0.42)), 1.0);
+    part.add(facet(g), trs(p, e, V3(0.40, 1.75 - 0.40 * t, 0.40)), 1.0);
   }
-  // a floating ring binding them
-  const ring = new THREE.TorusGeometry(S * 0.92, S * 0.045, 4, 12);
-  part.add(facet(ring), trs(V3(S * 0.55, S * 0.95, 0), new THREE.Euler(0.35, 0, -0.65), V3(1, 1, 1)), 1.0);
+  // small rune ring orbiting the lowest shard
+  const ring = new THREE.TorusGeometry(S * 0.42, S * 0.038, 4, 10);
+  part.add(facet(ring), trs(V3(S * 0.50, S * 0.42, S * 0.30), new THREE.Euler(0.9, 0.4, -0.5), V3(1, 1, 1)), 1.0);
 }
 
 /** Warlock: curved backswept horns off a low mantle. */
