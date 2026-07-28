@@ -4,3 +4,6 @@ refs/
 
 node_modules/
 .DS_Store
+node_modules/
+shots/
+package-lock.json
