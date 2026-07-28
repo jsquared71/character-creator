@@ -31,25 +31,6 @@ import * as THREE from 'three';
 const IRIS_TEX = 512;
 const SCLERA_TEX = 512;
 
-// --- spine workaround, see the note in the report -------------------------
-// three r180's WebGLProgram appends its own `float luminance( const in vec3 )`
-// to the prefix of EVERY fragment shader (getLuminanceFunction(), used by the
-// output colour-space helpers). That collides with the identically named helper
-// at the bottom of src/gfx/glsl/noise.js, which Bakery prepends to every bake:
-//
-//   ERROR: 'luminance' : function already has a body
-//
-// so *no* Bakery shader compiles under r180 and every baked texture comes back
-// black. bakery.js and noise.js are spine files this module does not own, so
-// the collision is defused locally: Bakery interpolates uniform *names*
-// verbatim into the declaration block, which sits between three's prefix and
-// NOISE_GLSL, so a preprocessor directive smuggled through a uniform name
-// renames the noise library's copy (and every call to it in the bake bodies
-// below, which are also downstream of the #define). Delete this the moment the
-// spine renames one of the two functions.
-const LUMA_SHIM =
-  'uEyeLumaShim;\n#define luminance noiseLuminance\nuniform float uEyeLumaShim2';
-
 // Half-angle from the +Z pole out to the limbus, radians. ~35 degrees: a touch
 // larger than a real eye, which is what reads as "heroic" at portrait distance.
 const IRIS_HALF_ANGLE = 0.62;
@@ -439,14 +420,13 @@ export function createEyeMaterial(ctx, params = {}) {
       const iris = bakery.bake(`eye-iris-v1-${color}`, IRIS_FRAG, {
         width: IRIS_TEX,
         height: IRIS_TEX,
-        uniforms: { [LUMA_SHIM]: 0, uColor: tintVec },
+        uniforms: { uColor: tintVec },
         wrap: THREE.ClampToEdgeWrapping,
         colorSpace: THREE.SRGBColorSpace
       });
       const sclera = bakery.bake('eye-sclera-v1', SCLERA_FRAG, {
         width: SCLERA_TEX,
         height: SCLERA_TEX,
-        uniforms: { [LUMA_SHIM]: 0 },
         wrap: THREE.ClampToEdgeWrapping,
         colorSpace: THREE.SRGBColorSpace
       });

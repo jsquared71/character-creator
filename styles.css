@@ -31,7 +31,7 @@
            Palatino, 'Hoefler Text', Georgia, 'Times New Roman', serif;
   --sans: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
 
-  --rail-w: clamp(268px, 24vw, 336px);
+  --rail-w: clamp(276px, 25vw, 340px);
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   color-scheme: dark;
@@ -95,10 +95,19 @@ body {
   position: relative;
   pointer-events: auto;
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px 14px 16px;
   min-height: 0;
+  /* deliberately not clipped: the scrim pseudo-element must bleed past the
+     rail so the panels never sit on a hard vertical edge */
+  overflow: visible;
+}
+
+.rail-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 10px 13px 8px;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
@@ -110,31 +119,31 @@ body {
 .rail::before {
   content: "";
   position: absolute;
-  top: -80px;
-  bottom: -80px;
-  width: 190%;
+  top: -90px;
+  bottom: -90px;
+  width: 152%;
   pointer-events: none;
   z-index: 0;
 }
 .rail-left::before {
-  left: -20px;
-  background: linear-gradient(to right, rgba(3, 4, 7, 0.92) 0%, rgba(3, 4, 7, 0.72) 46%, rgba(3, 4, 7, 0) 100%);
+  left: -24px;
+  background: linear-gradient(to right, rgba(3, 4, 7, 0.9) 0%, rgba(3, 4, 7, 0.68) 52%, rgba(3, 4, 7, 0.28) 78%, rgba(3, 4, 7, 0) 100%);
 }
 .rail-right::before {
-  right: -20px;
-  background: linear-gradient(to left, rgba(3, 4, 7, 0.92) 0%, rgba(3, 4, 7, 0.72) 46%, rgba(3, 4, 7, 0) 100%);
+  right: -24px;
+  background: linear-gradient(to left, rgba(3, 4, 7, 0.9) 0%, rgba(3, 4, 7, 0.68) 52%, rgba(3, 4, 7, 0.28) 78%, rgba(3, 4, 7, 0) 100%);
 }
 
 .rail > * { position: relative; z-index: 1; }
 
-.rail::-webkit-scrollbar { width: 10px; }
-.rail::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.45); }
-.rail::-webkit-scrollbar-thumb {
+.rail-inner::-webkit-scrollbar { width: 9px; }
+.rail-inner::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.45); }
+.rail-inner::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, #e6cd88, #9a7a2e 60%, #4a3611);
   border: 2px solid rgba(0, 0, 0, 0.6);
   border-radius: 6px;
 }
-.rail::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #fff0c4, #c8a94a 60%, #6a4f18); }
+.rail-inner::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #fff0c4, #c8a94a 60%, #6a4f18); }
 
 /* --------------------------------------------------------------------------
    Panels — gilt 9-slice frame + parchment grain
@@ -143,7 +152,7 @@ body {
 .panel {
   position: relative;
   isolation: isolate;
-  padding: 12px 13px 14px;
+  padding: 9px 11px 11px;
   border: 15px solid transparent;
   border-image: var(--frame-panel) 30 / 15px / 0 round;
   background: linear-gradient(168deg, var(--panel-a), var(--panel-b));
@@ -165,26 +174,27 @@ body {
 .panel > * { position: relative; z-index: 1; }
 
 .panel-title {
-  margin: 0 0 6px;
+  margin: 0 0 3px;
   font-family: var(--serif);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.17em;
+  letter-spacing: 0.19em;
   text-transform: uppercase;
   color: var(--gold);
   text-align: center;
   text-shadow: 0 1px 0 #000, 0 0 14px rgba(236, 209, 139, 0.28);
 }
+.panel-title-2 { margin-top: 10px; }
 
 .rule {
-  height: 22px;
-  margin: 0 0 10px;
-  background: var(--divider) center / 100% 22px no-repeat;
+  height: 18px;
+  margin: 0 0 8px;
+  background: var(--divider) center / 100% 18px no-repeat;
 }
-.rule-soft { height: 18px; margin: 12px 0 10px; opacity: 0.72; background-size: 100% 18px; }
+.rule-soft { height: 15px; margin: 9px 0 7px; opacity: 0.72; background-size: 100% 15px; }
 
 .caption {
-  margin: 9px 2px 0;
+  margin: 7px 2px 0;
   font-family: var(--serif);
   font-size: 13px;
   letter-spacing: 0.06em;
@@ -216,7 +226,8 @@ body {
   border-bottom: 0;
 }
 
-.title-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.title-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.title-text { min-width: 0; }
 
 .crest {
   width: 44px; height: 44px;
@@ -227,23 +238,29 @@ body {
 .title-main {
   margin: 0;
   font-family: var(--serif);
-  font-size: clamp(17px, 1.5vw, 23px);
+  font-size: clamp(15px, 1.28vw, 21px);
   font-weight: 600;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--gold-hi);
   text-shadow: 0 2px 0 #000, 0 0 22px rgba(236, 209, 139, 0.35);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .title-sub {
   margin: 2px 0 0;
-  font-size: 11.5px;
-  letter-spacing: 0.22em;
+  font-size: 11px;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.seg-faction { margin-inline: auto; }
+.seg-faction { margin-inline: auto; flex: none; }
+.title-right { flex: none; }
 
 .title-right { display: flex; align-items: center; gap: 10px; }
 .mini-label {
@@ -267,14 +284,14 @@ body {
   background: linear-gradient(180deg, rgba(12, 14, 20, 0.92), rgba(4, 5, 9, 0.95));
 }
 .seg-wide { display: flex; width: 100%; }
-.seg-wide .seg-btn { flex: 1; }
+.seg-wide .seg-btn { flex: 1 1 0; min-width: 0; padding: 6px 4px; font-size: 11px; letter-spacing: 0.05em; }
 
 .seg-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 6px 13px;
+  padding: 6px 11px;
   border: 1px solid transparent;
   background: linear-gradient(180deg, rgba(58, 52, 38, 0.5), rgba(16, 15, 12, 0.6));
   color: var(--ink-2);
@@ -349,16 +366,16 @@ body {
    -------------------------------------------------------------------------- */
 
 .grid { display: grid; }
-.grid-race { grid-template-columns: repeat(3, 1fr); gap: 7px; }
-.grid-class { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.grid-race { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.grid-class { grid-template-columns: repeat(5, 1fr); gap: 5px; }
 
 .tile {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 4px 4px 5px;
+  gap: 2px;
+  padding: 3px 3px 4px;
   border: 1px solid rgba(122, 100, 54, 0.55);
   background: linear-gradient(180deg, rgba(30, 27, 20, 0.85), rgba(8, 8, 12, 0.9));
   box-shadow: inset 0 1px 0 rgba(255, 236, 190, 0.12), 0 2px 5px rgba(0, 0, 0, 0.5);
@@ -377,8 +394,8 @@ body {
 
 .tile-name {
   font-family: var(--serif);
-  font-size: 11px;
-  line-height: 1.1;
+  font-size: 10.5px;
+  line-height: 1.15;
   letter-spacing: 0.05em;
   color: var(--ink-2);
   white-space: nowrap;
@@ -447,36 +464,47 @@ body {
    Controls
    -------------------------------------------------------------------------- */
 
+/* Inline rows: label | control | readout. Keeps the whole appearance panel
+   on screen at 1280x800 without a scroll. */
 .ctl {
   display: grid;
-  grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 5px 10px;
-  margin-bottom: 11px;
+  gap: 4px 9px;
+  margin-bottom: 7px;
 }
 .ctl:last-child { margin-bottom: 0; }
 
+.ctl-slider { grid-template-columns: minmax(0, auto) minmax(0, 1fr) 54px; }
+.ctl-step { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+.ctl-swatch { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+.ctl-gender { grid-template-columns: minmax(0, 1fr); }
+
 .ctl-label {
   font-family: var(--serif);
-  font-size: 12.5px;
-  letter-spacing: 0.13em;
+  font-size: 11.5px;
+  letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--ink-2);
   text-shadow: 0 1px 0 #000;
+  white-space: nowrap;
 }
 
 .ctl-value {
+  justify-self: end;
+  width: 100%;
+  text-align: center;
   font-family: var(--sans);
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--gold);
-  padding: 1px 7px;
+  padding: 1px 3px;
   border: 1px solid rgba(122, 100, 54, 0.6);
   background: rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.ctl-slider > .range { grid-column: 1 / -1; }
-.ctl > .seg-wide, .ctl > .swatches, .ctl > .stepper { grid-column: 1 / -1; }
+.ctl-gender > .seg-wide { margin-top: 2px; }
 
 /* Range ------------------------------------------------------------------ */
 
@@ -484,8 +512,8 @@ body {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 22px;
-  margin: 2px 0 0;
+  height: 20px;
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
@@ -534,18 +562,17 @@ body {
 
 .stepper {
   display: grid;
-  grid-template-columns: 34px 1fr 34px;
+  grid-template-columns: 26px 1fr 26px;
   align-items: stretch;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 3px;
 }
 .step-btn {
   border: 1px solid rgba(122, 100, 54, 0.7);
   background: linear-gradient(180deg, rgba(58, 50, 30, 0.85), rgba(10, 10, 14, 0.9));
   color: var(--gold);
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1;
-  padding: 5px 0;
+  padding: 3px 0;
   cursor: pointer;
   box-shadow: inset 0 1px 0 rgba(255, 236, 190, 0.16);
   transition: background 130ms var(--ease), color 130ms var(--ease), border-color 130ms var(--ease);
@@ -564,18 +591,18 @@ body {
   background: rgba(0, 0, 0, 0.55);
   box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.75);
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
+  font-size: 11.5px;
   letter-spacing: 0.08em;
   color: var(--ink);
 }
 
 /* Swatches --------------------------------------------------------------- */
 
-.swatches { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 3px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .swatch {
   position: relative;
-  width: 30px; height: 30px;
+  width: 26px; height: 26px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -604,19 +631,21 @@ body {
 
 /* Toggles ---------------------------------------------------------------- */
 
-.ctl-toggles { display: flex; flex-wrap: wrap; gap: 7px; }
+.ctl-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 
 .toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 11px 6px 8px;
+  justify-content: center;
+  flex: 1 1 auto;
+  gap: 6px;
+  padding: 5px 6px;
   border: 1px solid rgba(122, 100, 54, 0.6);
   background: linear-gradient(180deg, rgba(22, 22, 30, 0.9), rgba(6, 7, 12, 0.94));
   color: var(--ink-3);
   font-family: var(--serif);
-  font-size: 12px;
-  letter-spacing: 0.1em;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   cursor: pointer;
   transition: color 130ms var(--ease), border-color 130ms var(--ease), background 130ms var(--ease);
@@ -824,17 +853,17 @@ body.entering .ui-root { animation: recede 1.5s var(--ease) forwards; }
 
 /* Keep the rails clear of the character on 1280-class displays. */
 @media (max-width: 1439px) {
-  :root { --rail-w: clamp(252px, 22vw, 296px); }
-  .grid-class { grid-template-columns: repeat(5, 1fr); gap: 5px; }
-  .panel { padding: 10px 11px 12px; }
+  .mini-label { display: none; }
+  .seg-btn { padding: 6px 9px; font-size: 12px; }
 }
 
 @media (max-width: 1120px) {
-  :root { --rail-w: 236px; }
-  .title-main { font-size: 17px; letter-spacing: 0.14em; }
-  .mini-label { display: none; }
+  :root { --rail-w: clamp(238px, 21vw, 266px); }
+  .title-main { letter-spacing: 0.1em; }
+  .title-sub { display: none; }
   .grid-race { gap: 5px; }
-  .tile-name { font-size: 10px; }
+  .tile-name { font-size: 9.5px; }
+  .swatch { width: 23px; height: 23px; }
 }
 
 /* Below 900px the rails stop being columns and become a two-column tray
@@ -849,7 +878,7 @@ body.entering .ui-root { animation: recede 1.5s var(--ease) forwards; }
       "left  right"
       "bar   bar";
   }
-  .rail { padding: 8px 10px 10px; gap: 10px; }
+  .rail-inner { padding: 8px 10px 10px; gap: 10px; }
   .rail::before {
     left: -20px; right: -20px; width: auto; top: -50px; bottom: -30px;
     background: linear-gradient(to top, rgba(3, 4, 7, 0.94) 0%, rgba(3, 4, 7, 0.8) 55%, rgba(3, 4, 7, 0) 100%);

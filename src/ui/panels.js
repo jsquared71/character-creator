@@ -633,12 +633,12 @@ function drawPortrait(cv, race) {
   g.fillRect(0, H * 0.62, W, H * 0.38);
 
   const cx = W * 0.5;
-  const headR = H * 0.155 * clamp(b.headScale, 0.8, 1.6);
+  const headR = H * 0.178 * clamp(b.headScale, 0.8, 1.6);
   const hunch = clamp(b.posture, -0.1, 0.4);
-  const headCy = H * (0.40 + hunch * 0.20) + (b.neck < 0.6 ? H * 0.03 : 0);
-  const neckLen = H * 0.085 * clamp(b.neck, 0.2, 1.3);
+  const headCy = H * (0.40 + hunch * 0.16) + (b.neck < 0.6 ? H * 0.03 : 0);
+  const neckLen = H * 0.075 * clamp(b.neck, 0.2, 1.3);
   const shoulderY = headCy + headR * 0.92 + neckLen;
-  const halfW = W * 0.30 * clamp(b.shoulderW, 0.7, 1.6);
+  const halfW = W * 0.32 * clamp(b.shoulderW, 0.7, 1.6);
   const neckW = headR * (0.34 + 0.32 * clamp(b.neck < 0.7 ? 1.4 : 0.9, 0, 2)) * (b.chest > 1.2 ? 1.2 : 1);
 
   const line = (a) => {
@@ -655,10 +655,10 @@ function drawPortrait(cv, race) {
   g.quadraticCurveTo(cx + halfW * 0.98, shoulderY + H * 0.03, cx + halfW, H + 2);
   g.closePath();
   const tg = g.createLinearGradient(cx - halfW, 0, cx + halfW, 0);
-  tg.addColorStop(0, sh(skin, -0.62));
-  tg.addColorStop(0.35, sh(skin, -0.32));
-  tg.addColorStop(0.72, sh(skin, -0.48));
-  tg.addColorStop(1, sh(skin, -0.7));
+  tg.addColorStop(0, sh(skin, -0.56));
+  tg.addColorStop(0.35, sh(skin, -0.24));
+  tg.addColorStop(0.72, sh(skin, -0.4));
+  tg.addColorStop(1, sh(skin, -0.64));
   g.fillStyle = tg;
   g.fill();
   line(0.6);
@@ -696,9 +696,9 @@ function drawPortrait(cv, race) {
     g.ellipse(cx, headCy + headR * (0.5 + snout * 0.34), headR * (0.3 + snout * 0.4), headR * (0.22 + snout * 0.42), 0, 0, Math.PI * 2);
   }
   const hg = g.createRadialGradient(cx - headR * 0.4, headCy - headR * 0.5, headR * 0.1, cx, headCy, headR * 1.7);
-  hg.addColorStop(0, sh(skin, 0.22));
-  hg.addColorStop(0.45, skin);
-  hg.addColorStop(1, sh(skin, -0.46));
+  hg.addColorStop(0, sh(skin, 0.34));
+  hg.addColorStop(0.42, sh(skin, 0.06));
+  hg.addColorStop(1, sh(skin, -0.4));
   g.fillStyle = hg;
   g.fill();
   line(0.55);
@@ -792,9 +792,9 @@ function drawPortrait(cv, race) {
   g.restore();
 
   // vignette
-  const vg = g.createRadialGradient(W * 0.5, H * 0.45, W * 0.2, W * 0.5, H * 0.5, W * 0.72);
+  const vg = g.createRadialGradient(W * 0.5, H * 0.45, W * 0.24, W * 0.5, H * 0.5, W * 0.74);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, 'rgba(0,0,0,0.62)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.48)');
   g.fillStyle = vg;
   g.fillRect(0, 0, W, H);
   g.restore();
@@ -1053,6 +1053,15 @@ export function buildUI({ store }) {
   const actionbar = document.getElementById('actionbar');
   if (!titlebar || !railL || !railR || !actionbar) return;
 
+  // The rails themselves stay put (they carry the scrim); an inner box does the
+  // scrolling so the scrim never slides away from the panel edges.
+  const innerL = document.createElement('div');
+  innerL.className = 'rail-inner';
+  railL.append(innerL);
+  const innerR = document.createElement('div');
+  innerR.className = 'rail-inner';
+  railR.append(innerR);
+
   const races = store.allRaces;
   const classes = store.allClasses;
   const FACTION_KEYS = ['All', 'Alliance', 'Horde', 'Neutral'];
@@ -1189,7 +1198,7 @@ export function buildUI({ store }) {
   const classCaption = el('p', 'caption', { 'aria-live': 'polite' });
   selectPanel.append(classGrid, classCaption);
 
-  railL.append(selectPanel);
+  innerL.append(selectPanel);
 
   /* ---------- right rail: appearance ---------- */
 
@@ -1229,12 +1238,10 @@ export function buildUI({ store }) {
       id, type: 'range', min: '0', max: '1', step: '0.01', 'aria-label': label
     });
     input.addEventListener('input', () => store.set({ [key]: Number(input.value) }));
-    row.append(lab, out, input);
+    row.append(lab, input, out);
     formPanel.append(row);
     return { key, input, out };
   });
-
-  formPanel.append(el('div', 'rule rule-soft', { 'aria-hidden': 'true' }));
 
   // steppers
   function stepper(key, label, count) {
@@ -1307,7 +1314,7 @@ export function buildUI({ store }) {
     return { key, btn: b };
   });
   formPanel.append(toggleRow);
-  railR.append(formPanel);
+  innerR.append(formPanel);
 
   /* ---------- action bar ---------- */
 

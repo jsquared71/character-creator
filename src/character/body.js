@@ -23,7 +23,7 @@
 // Budget: ~12-18k triangles depending on race (limit is 40k).
 
 import * as THREE from 'three';
-import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* -------------------------------------------------------------------------- */
 /* math helpers                                                               */
@@ -807,6 +807,64 @@ function laplacianSmooth(geometry, iterations, strength) {
 }
 
 /**
+ * Weld coincident vertices (same position AND same UV, so deliberate texture
+ * seams survive) and rewrite the index.
+ *
+ * This is `BufferGeometryUtils.mergeVertices` in spirit, but that one hashes
+ * once per *index entry* — 36k times for this mesh — which costs more than the
+ * rest of the build put together. The loft already emits shared ring vertices,
+ * so this pass only has to sweep the real vertex list.
+ */
+function weldVertices(geometry, tolerance = 1e-5) {
+  const names = Object.keys(geometry.attributes);
+  const attrs = names.map((n) => geometry.attributes[n]);
+  const count = geometry.attributes.position.count;
+  const mul = 1 / tolerance;
+  const map = new Map();
+  const remap = new Uint32Array(count);
+  const keep = [];
+
+  for (let i = 0; i < count; i++) {
+    let key = '';
+    for (let a = 0; a < attrs.length; a++) {
+      const at = attrs[a];
+      const s = at.itemSize;
+      const arr = at.array;
+      const o = i * s;
+      for (let k = 0; k < s; k++) key += (((arr[o + k] * mul) | 0) + ',');
+    }
+    const hit = map.get(key);
+    if (hit === undefined) {
+      map.set(key, keep.length);
+      remap[i] = keep.length;
+      keep.push(i);
+    } else {
+      remap[i] = hit;
+    }
+  }
+
+  const src = geometry.index.array;
+  const idx = new Uint32Array(src.length);
+  for (let i = 0; i < src.length; i++) idx[i] = remap[src[i]];
+
+  const out = new THREE.BufferGeometry();
+  for (let a = 0; a < attrs.length; a++) {
+    const at = attrs[a];
+    const s = at.itemSize;
+    const arr = at.array;
+    const dst = new Float32Array(keep.length * s);
+    for (let v = 0; v < keep.length; v++) {
+      const o = keep[v] * s;
+      const d = v * s;
+      for (let k = 0; k < s; k++) dst[d + k] = arr[o + k];
+    }
+    out.setAttribute(names[a], new THREE.BufferAttribute(dst, s));
+  }
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  return out;
+}
+
+/**
  * Any vertex whose incident triangles are all degenerate (the pinched poles of
  * the skull, which sit buried inside the neck) comes out of
  * computeVertexNormals with a zero normal, which would be a NaN in the shader.
@@ -1283,14 +1341,14 @@ export function buildBodyGeometry(build, features, opts = {}) {
       ];
       rad = [[0, hipR * 0.26], [0.6, hipR * 0.11], [0.86, hipR * 0.09], [0.93, hipR * 0.30], [1, hipR * 0.06]];
     } else if (bushy) {
-      len = H * 0.30;
+      len = H * 0.27;
       keys = [
         root,
         root.clone().add(V3(0, -len * 0.10, -len * 0.42)),
         root.clone().add(V3(0, -len * 0.34, -len * 0.80)),
         root.clone().add(V3(0, -len * 0.72, -len * 0.98))
       ];
-      rad = [[0, hipR * 0.34], [0.35, hipR * 0.52], [0.72, hipR * 0.44], [1, hipR * 0.10]];
+      rad = [[0, hipR * 0.30], [0.35, hipR * 0.44], [0.72, hipR * 0.38], [1, hipR * 0.09]];
     } else if (dragon) {
       len = H * 0.52;
       keys = [
@@ -1350,9 +1408,10 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const geoms = [torsoMB, ...armParts, ...legParts, ...headExtras, ...tailParts, ...detailParts].map((m) =>
     m.toGeometry()
   );
-  let geometry = mergeGeometries(geoms, false);
+  const merged = mergeGeometries(geoms, false);
   for (const g of geoms) g.dispose();
-  geometry = mergeVertices(geometry, 1e-5);
+  const geometry = weldVertices(merged, 1e-5);
+  merged.dispose();
 
   laplacianSmooth(geometry, 3, 0.55);
   geometry.deleteAttribute('aSmooth');

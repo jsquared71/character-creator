@@ -152,7 +152,7 @@ const FilmicLookShader = {
       // --- filmic grain -----------------------------------------------------
       // Locked to device pixels (gl_FragCoord), so grain stays the same
       // physical size regardless of window size or DPR, and reseeded every
-      // frame from `time` via two irrational strides so it never cycles.
+      // frame from the 'time' uniform via two irrational strides, never cycling.
       vec2  fc = gl_FragCoord.xy;
       float t1 = fract( time * 0.6180339887 );
       float t2 = fract( time * 0.3819660113 + 0.5 );

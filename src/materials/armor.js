@@ -59,17 +59,17 @@ const TIER_ART = {
   plate: {
     base: 0x9aa2ab,
     dark: 0x1d2126,
-    bare: 0xcfd6dd,          // exposed, polished steel on the edges
+    bare: 0xb9c0c8,          // exposed, polished steel on the edges
     trimBake: 0xc8ccd4,
-    bareRough: 0.11,
+    bareRough: 0.13,
     bareMetal: 1.0,
-    tintAmt: 0.62,
+    tintAmt: 0.42,
     normalScale: 1.05,
     aniso: 0.85,
     anisoExp: 46.0,
-    anisoGain: 1.5,
-    edgeLo: 3.5,             // 1/m — curvature where wear starts
-    edgeHi: 18.0,            // 1/m — curvature where wear is total
+    anisoGain: 1.1,
+    edgeLo: 6.0,             // 1/m — curvature where wear starts (r ~ 17cm)
+    edgeHi: 26.0,            // 1/m — curvature where wear is total (r ~ 4cm)
     aoIntensity: 0.9,
     threads: 0.0
   },
@@ -78,15 +78,15 @@ const TIER_ART = {
     dark: 0x15181c,
     bare: 0xc2c9d1,
     trimBake: 0xb9beca,
-    bareRough: 0.16,
+    bareRough: 0.18,
     bareMetal: 1.0,
-    tintAmt: 0.42,
+    tintAmt: 0.32,
     normalScale: 1.35,
     aniso: 0.6,
     anisoExp: 30.0,
-    anisoGain: 1.1,
-    edgeLo: 4.0,
-    edgeHi: 22.0,
+    anisoGain: 0.9,
+    edgeLo: 7.0,
+    edgeHi: 30.0,
     aoIntensity: 1.0,
     threads: 0.0
   },
@@ -97,13 +97,13 @@ const TIER_ART = {
     trimBake: 0xbb9463,      // waxed thread
     bareRough: 0.42,
     bareMetal: 0.06,
-    tintAmt: 0.5,
+    tintAmt: 0.34,
     normalScale: 1.15,
     aniso: 0.25,
     anisoExp: 16.0,
     anisoGain: 0.45,
-    edgeLo: 5.0,
-    edgeHi: 26.0,
+    edgeLo: 8.0,
+    edgeHi: 34.0,
     aoIntensity: 0.85,
     threads: 0.0
   },
@@ -114,13 +114,13 @@ const TIER_ART = {
     trimBake: 0xd8b262,      // gold embroidery thread
     bareRough: 0.72,
     bareMetal: 0.0,
-    tintAmt: 0.88,
+    tintAmt: 0.74,
     normalScale: 0.85,
     aniso: 0.35,
     anisoExp: 12.0,
     anisoGain: 0.35,
-    edgeLo: 6.0,
-    edgeHi: 30.0,
+    edgeLo: 9.0,
+    edgeHi: 38.0,
     aoIntensity: 0.7,
     threads: 104.0
   }
@@ -132,8 +132,8 @@ const TIER_ART = {
 const TRIM_ART = {
   gilt:        { color: 0xffc44a, metal: 1.0,  rough: 0.11, emissive: 0.30, tinted: 0.0 },
   riveted:     { color: 0xc8ccd4, metal: 1.0,  rough: 0.19, emissive: 0.08, tinted: 0.0 },
-  runic:       { color: 0xd8c9ff, metal: 0.35, rough: 0.30, emissive: 1.15, tinted: 0.85 },
-  embroidered: { color: 0xe0bc72, metal: 0.28, rough: 0.38, emissive: 0.32, tinted: 0.35 },
+  runic:       { color: 0xd8c9ff, metal: 0.35, rough: 0.30, emissive: 0.55, tinted: 0.85 },
+  embroidered: { color: 0xe0bc72, metal: 0.28, rough: 0.38, emissive: 0.26, tinted: 0.35 },
   bone:        { color: 0xe6dcc2, metal: 0.05, rough: 0.52, emissive: 0.10, tinted: 0.0 },
   stitched:    { color: 0xc79a63, metal: 0.10, rough: 0.55, emissive: 0.06, tinted: 0.25 },
   leather:     { color: 0x8a5a33, metal: 0.10, rough: 0.62, emissive: 0.05, tinted: 0.2 }
@@ -156,26 +156,28 @@ const H_GLSL = {
   plate: /* glsl */ `
     vec3 p = vec3(auv, uSeed);
 
-    // Planishing: the bowls a hammer leaves in a sheet.
-    vec3 w = worley(p, 7.0);
-    float dent = 1.0 - smoothstep(0.04, 0.58, w.x);
-    ah = -0.55 * dent;
+    // Planishing: the shallow bowls a hammer leaves in a sheet. Kept low in
+    // amplitude — dents belong in the normal map, not in the albedo.
+    vec3 w = worley(p, 9.0);
+    float dent = 1.0 - smoothstep(0.02, 0.70, w.x);
+    ah = -0.30 * dent;
 
     // Broad roll of the sheet itself.
-    ah += 0.30 * fbm(p * 5.0, 4, 2.0, 0.5);
+    ah += 0.26 * fbm(p * 5.0, 4, 2.0, 0.5);
 
     // Scratches: fibre noise stretched hard along two shear directions.
     float s1 = fibre(p * 24.0, normalize(vec3(0.94, 0.30, 0.16)), 18.0, 4);
     float s2 = fibre(p * 39.0 + 11.7, normalize(vec3(0.28, 0.95, 0.11)), 24.0, 3);
     float scratch = (1.0 - smoothstep(0.015, 0.055, abs(s1))) * 0.8
                   + (1.0 - smoothstep(0.010, 0.040, abs(s2))) * 0.5;
-    ah -= 0.24 * clamp(scratch, 0.0, 1.0);
+    ah -= 0.16 * clamp(scratch, 0.0, 1.0);
 
-    // Pitting — corrosion pinpricks, and only in some cells.
-    vec3 pit = worley(p + 3.1, 56.0);
-    float pits = 1.0 - smoothstep(0.0, 0.32, pit.x);
-    pits *= step(0.58, hash1(floor(p.xy * 56.0) + 17.0));
-    ah -= 0.45 * pits;
+    // Pitting — corrosion pinpricks, and only in some cells. These are the
+    // only features deep enough to darken the albedo.
+    vec3 pit = worley(p + 3.1, 64.0);
+    float pits = 1.0 - smoothstep(0.0, 0.30, pit.x);
+    pits *= step(0.62, hash1(floor(p.xy * 64.0) + 17.0));
+    ah -= 0.62 * pits;
   `,
 
   // Two worley ring lattices, half a cell apart, alternating which sits proud
@@ -205,13 +207,22 @@ const H_GLSL = {
   // fbm grain, worley pores and creases, plus dashed stitch seams.
   leather: /* glsl */ `
     vec3 p = vec3(auv, uSeed);
-    float grain = fbm(p * 34.0, 5, 2.15, 0.55);
-    vec3 w = worley(p, 16.0);
-    float pores = 1.0 - smoothstep(0.0, 0.26, w.x);
-    float creases = 1.0 - smoothstep(0.0, 0.10, w.y - w.x);
 
-    ah = grain * 0.55 - creases * 0.55 - pores * 0.18;
-    ah += 0.20 * (ridged(p * 6.0, 3, 2.0, 0.5) - 0.5);   // broad folds
+    // Grain: two octaves of scale — a coarse tooth and a fine one.
+    float grain = fbm(p * 40.0, 5, 2.15, 0.55);
+    float fine = fbm(p * 130.0, 3, 2.0, 0.5);
+
+    // Pore cells, small and shallow — this is hide, not reptile scale.
+    vec3 w = worley(p, 46.0);
+    float pores = 1.0 - smoothstep(0.0, 0.22, w.x);
+    float creases = 1.0 - smoothstep(0.0, 0.06, w.y - w.x);
+
+    // A sparse layer of broad wrinkles where the hide has flexed.
+    vec3 w2 = worley(p + 5.0, 5.0);
+    float wrinkle = 1.0 - smoothstep(0.0, 0.11, w2.y - w2.x);
+
+    ah = grain * 0.42 + fine * 0.22 - creases * 0.20 - pores * 0.12 - wrinkle * 0.24;
+    ah += 0.16 * (ridged(p * 6.0, 3, 2.0, 0.5) - 0.5);   // broad folds
 
     // Stitch seams: three dashed rows plus one dashed column.
     float stitch = 0.0;
@@ -248,7 +259,7 @@ const H_GLSL = {
     ah += 0.28 * fbm(p * 7.0, 4, 2.0, 0.5);               // slack and drape
 
     // Embroidery / runework, only for the embroidered and runic trims.
-    vec2 q = fract(auv * 4.0) - 0.5;
+    vec2 q = fract(auv * 7.0) - 0.5;
     float r = length(q);
     float ang = atan(q.y, q.x);
     float ring  = 1.0 - smoothstep(0.012, 0.032, abs(r - 0.31));
@@ -258,7 +269,7 @@ const H_GLSL = {
     float knot = 1.0 - smoothstep(0.020, 0.050,
                    abs(ridged(vec3(auv * 9.0, 2.5), 3, 2.0, 0.5) - 0.62));
     float emb = clamp(max(max(ring, ring2), max(ticks, knot * 0.85)), 0.0, 1.0);
-    ah += uEmbroider * 0.80 * emb;
+    ah += uEmbroider * 0.55 * emb;
   `
 };
 
@@ -273,12 +284,13 @@ const S_GLSL = {
     vec3 steel = uBase * (0.80 + 0.36 * grime);
     aAlb = mix(steel, mix(steel, uTint, uTintAmt), paint);
 
-    // Recesses go dark and dirty.
-    aAlb = mix(uDark, aAlb, smoothstep(-0.85, 0.15, ah));
+    // Only the deep pits and corrosion go dark — dents read through the
+    // normal map, so they must not print themselves into the albedo.
+    aAlb = mix(uDark, aAlb, smoothstep(-0.95, -0.22, ah));
 
     aMetal = uMetal * (1.0 - 0.40 * paint);
-    aRough = uRough + 0.24 * (1.0 - smoothstep(-0.60, 0.30, ah)) + 0.12 * grime + 0.16 * paint;
-    aAo = 0.16 + 0.84 * smoothstep(-1.0, 0.10, ah);
+    aRough = uRough + 0.20 * (1.0 - smoothstep(-0.70, -0.05, ah)) + 0.10 * grime + 0.16 * paint;
+    aAo = 0.40 + 0.60 * smoothstep(-1.0, -0.05, ah);
   `,
 
   mail: /* glsl */ `
@@ -315,15 +327,17 @@ const S_GLSL = {
     float vdash = 1.0 - smoothstep(0.20, 0.40, abs(fract(auv.y * 44.0) - 0.5));
     stitch = clamp(max(stitch, vline * vdash), 0.0, 1.0);
 
+    // Tint leather by multiplying rather than mixing, so a loud class colour
+    // (Rogue's yellow) dyes the hide instead of replacing it.
     vec3 hide = uBase * (0.72 + 0.52 * grime);
-    hide = mix(hide, uTint, uTintAmt * 0.55);
-    hide = mix(uDark, hide, smoothstep(-0.75, 0.15, ah));
+    hide = mix(hide, hide * (uTint * 2.1 + 0.10), uTintAmt);
+    hide = mix(uDark, hide, smoothstep(-0.85, -0.10, ah));
 
     // Waxed thread reads lighter and much rougher than the hide.
     aAlb = mix(hide, uTrim * (0.8 + 0.3 * grime), stitch);
     aMetal = mix(uMetal, 0.03, stitch);
     aRough = mix(uRough + 0.18 * (1.0 - grime), 0.72, stitch);
-    aAo = 0.20 + 0.80 * smoothstep(-0.9, 0.10, ah);
+    aAo = 0.42 + 0.58 * smoothstep(-0.9, -0.05, ah);
   `,
 
   cloth: /* glsl */ `
@@ -336,7 +350,7 @@ const S_GLSL = {
     vec3 p = vec3(auv, uSeed);
     float grime = 0.5 + 0.5 * fbm(p * 8.0, 4, 2.0, 0.55);
 
-    vec2 q = fract(auv * 4.0) - 0.5;
+    vec2 q = fract(auv * 7.0) - 0.5;
     float r = length(q);
     float ang = atan(q.y, q.x);
     float ring  = 1.0 - smoothstep(0.012, 0.032, abs(r - 0.31));
@@ -794,8 +808,8 @@ export function createArmorMaterial(ctx, params = {}) {
     material.normalScale.set(art.normalScale, art.normalScale);
     material.aoMapIntensity = art.aoIntensity;
     material.anisotropy = art.aniso;
-    material.envMapIntensity = 1.0 + 0.45 * props.metalness;
-    material.sheen = 0.02 + props.clothMix * 0.55;
+    material.envMapIntensity = 1.0 + 0.25 * props.metalness;
+    material.sheen = 0.02 + props.clothMix * 0.20;
     material.sheenColor.set(tintHex);
 
     // Our own uniforms.

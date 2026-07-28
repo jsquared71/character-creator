@@ -55,7 +55,13 @@ const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
          '--ignore-gpu-blocklist', '--enable-webgl', '--disable-lcd-text']
 });
-const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({
+  viewport: { width: +(args.width || 1280), height: +(args.height || 720) },
+  deviceScaleFactor: 1
+});
+// SwiftShader renders the full post chain slowly; a single frame can take
+// seconds, so the default 30s screenshot timeout is not enough.
+page.setDefaultTimeout(180000);
 
 const errors = [];
 const warnings = [];

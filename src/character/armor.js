@@ -376,8 +376,9 @@ function metrics(joints, build, race) {
   const neckR = j.neck?.radius || H * 0.045;
 
   let spine = Array.isArray(j.spine) && j.spine.length >= 2
-    ? j.spine.map((p) => V3().copy(p))
+    ? j.spine.map((p) => V3().copy(p)).filter((p, i, arr) => i === 0 || p.distanceToSquared(arr[i - 1]) > 1e-10)
     : null;
+  if (spine && spine.length < 2) spine = null;
   if (!spine) {
     spine = [];
     for (let i = 0; i <= 4; i++) spine.push(hipsPos.clone().lerp(neckPos, i / 4));
@@ -416,9 +417,33 @@ function metrics(joints, build, race) {
   const shoulderR = shoulders.reduce((a, s) => a + s.r, 0) / shoulders.length;
   const shoulderY = shoulders.reduce((a, s) => a + s.p.y, 0) / shoulders.length;
 
-  const chestW = shoulderX * 0.74 + shoulderR * 0.30;
-  const waistW = Math.max(hipR * 0.86, chestW * 0.66);
-  const depth = 0.64 + 0.12 * (b.chest || 1);
+  // Torso section, rebuilt from the same multipliers races.js documents as
+  // "torso ring radii" so the shell sits ON the body instead of inside it.
+  // `unit` is recovered from the reported hip joint, so it follows any scaling
+  // the body applied to hit its exact height.
+  const hipMul = b.hip || 1, waistMul = b.waist || 0.9, chestMul = b.chest || 1, shwMul = b.shoulderW || 1;
+  const unit = (j.hips?.radius && hipMul > 0.05) ? hipR / hipMul : H * 0.098;
+  const hipR0 = unit * hipMul, waistR0 = unit * waistMul, chestR0 = unit * chestMul;
+  const shoulderHalf = unit * shwMul * 1.28;
+  const barrel = 0.72 + 0.16 * clamp01(chestMul - 1);
+  const R_CTRL = [
+    [0.00, hipR0 * 0.80], [0.07, hipR0 * 1.02], [0.16, hipR0 * 0.98],
+    [0.30, waistR0 * 0.94], [0.42, waistR0 * 1.02],
+    [0.62, chestR0 * 1.02], [0.76, chestR0 * 1.06],
+    [0.88, shoulderHalf * 0.66], [1.00, shoulderHalf * 0.50]
+  ];
+  const A_CTRL = [[0.00, 0.86], [0.16, 0.82], [0.34, 0.74], [0.62, barrel], [0.80, barrel * 1.02], [1.00, 0.80]];
+  const B_CTRL = [[0.00, 1.11], [0.14, 1.13], [0.34, 1.00], [0.68, 1.03], [1.00, 1.00]];
+  const torsoR = (t) => profile(clamp01(t), R_CTRL);
+  const torsoAspect = (t) => profile(clamp01(t), A_CTRL);
+  const torsoBack = (t) => profile(clamp01(t), B_CTRL);
+  // trapezius hump the body lofts onto hunched races
+  const humpAmt = unit * (0.10 + 1.35 * Math.max(0, b.posture || 0)) * (0.6 + 0.4 * chestMul);
+  const hump = (t, back) => humpAmt * gauss(t - 0.92, 0.13) * Math.max(0, back);
+
+  const chestW = torsoR(0.72);
+  const waistW = torsoR(0.30);
+  const depth = torsoAspect(0.40);
 
   const frameAt = (t) => {
     const tt = clamp01(t);
@@ -446,7 +471,8 @@ function metrics(joints, build, race) {
     hipsPos, hipR, neckPos, neckR,
     shoulders, hands, feet,
     shoulderX, shoulderR, shoulderY,
-    chestW, waistW, hipW: hipR, depth,
+    unit, torsoR, torsoAspect, torsoBack, hump,
+    chestW, waistW, hipW: torsoR(0.07), depth,
     posture: b.posture || 0,
     legThick: b.legThick || 1,
     armThick: b.armThick || 1,
@@ -527,13 +553,6 @@ function buildChest(ctx) {
 
   // half-width / half-depth control profiles across the covered span
   const wCtrl = [
-    [0.00, M.hipW * 1.02], [0.18, M.waistW * 1.00], [0.45, M.chestW * 0.94],
-    [0.72, M.chestW * 1.00], [0.90, M.chestW * 0.82], [1.00, M.neckR * 1.38]
-  ];
-  const dCtrl = [
-    [0.00, 1.02], [0.35, 0.98], [0.70, 1.06], [1.00, 0.94]
-  ];
-
   const segs = T.segs;
   const rows = 14;
   const rowFrames = [];
@@ -544,25 +563,30 @@ function buildChest(ctx) {
 
   const shellGeo = surface(segs, rows, (uu, vv, out) => {
     const f = rowFrames[Math.round(vv * rows)];
+    const ts = lerp(vLow, vHigh, vv);              // parameter along the body's spine
     const th = TAU * uu + Math.PI * 0.5;
     const ct = Math.cos(th), st = Math.sin(th);
-    let w = profile(vv, wCtrl) + off;
-    let d = w * M.depth * profile(vv, dCtrl) + off * 0.5;
-    // pectoral / back plates
+    // the body lofts a superellipse (n ~ 2.2), so an ellipse here would sink
+    // into it at the diagonals
+    const cs = Math.sign(ct) * Math.pow(Math.abs(ct), 0.90);
+    const ss = Math.sign(st) * Math.pow(Math.abs(st), 0.90);
     const front = Math.max(0, st);
     const back = Math.max(0, -st);
-    const pec = bulge * gauss(vv - 0.66, 0.13) * (gauss(ct - 0.42, 0.30) + gauss(ct + 0.42, 0.30));
-    const spineRidge = bulge * 0.55 * back * back * gauss(vv - 0.55, 0.26);
-    const waistPinch = -0.06 * gauss(vv - 0.22, 0.10);
-    const k = 1 + pec * front + spineRidge + waistPinch;
+    let w = M.torsoR(ts) * 1.015 + off;
+    let d = M.torsoR(ts) * M.torsoAspect(ts) * lerp(1, M.torsoBack(ts), back) * 1.015 + off * 0.55;
+    // pectoral / back plates
+    const pec = bulge * gauss(ts - 0.70, 0.12) * (gauss(ct - 0.42, 0.30) + gauss(ct + 0.42, 0.30));
+    const spineRidge = bulge * 0.45 * back * back * gauss(ts - 0.60, 0.24);
+    const k = 1 + pec * front + spineRidge;
     // cloth robes flare at the hem instead of tapering
-    const flare = isCloth ? 1 + 0.30 * Math.pow(1 - vv, 2.2) : 1;
+    const flare = isCloth ? 1 + 0.28 * Math.pow(1 - vv, 2.2) : 1;
     w *= k * flare;
     d *= k * flare;
+    const humpZ = M.hump(ts, back);
     out.set(
-      f.p.x + f.right.x * w * ct + f.fwd.x * d * st,
-      f.p.y + f.right.y * w * ct + f.fwd.y * d * st,
-      f.p.z + f.right.z * w * ct + f.fwd.z * d * st
+      f.p.x + f.right.x * w * cs + f.fwd.x * (d * ss - humpZ),
+      f.p.y + f.right.y * w * cs + f.fwd.y * (d * ss - humpZ) + humpZ * 0.45,
+      f.p.z + f.right.z * w * cs + f.fwd.z * (d * ss - humpZ)
     );
   }, { closedU: true, flat: T.flat, trim: (uu, vv) => trimFn(uu, vv) });
   part.add(shellGeo);
