@@ -104,15 +104,17 @@ const CARD_FRAG = /* glsl */ `
     // card end is a spray of points rather than a chopped-off band.
     float len = mix(0.62, 1.0, r2);
     float along = clamp(v / len, 0.0, 1.0);
-    float taper = pow(1.0 - along, 0.45);
-    float w = (0.5 / uCount) * mix(0.35, 1.0, r3) * uThick * taper;
+    // Stays close to full gauge for most of its length, then runs out quickly:
+    // a strand that thins linearly from the root reads as a wire, not hair.
+    float taper = pow(1.0 - along, 0.30);
+    float w = (0.5 / uCount) * mix(0.45, 1.15, r3) * uThick * taper;
 
     float d = abs(u - cx);
-    float a = w > 1e-5 ? 1.0 - smoothstep(w * 0.55, w, d) : 0.0;
+    float a = w > 1e-5 ? 1.0 - smoothstep(w * 0.60, w, d) : 0.0;
 
     // Fine break-up along the strand so it is not a clean airbrushed line.
     float grain = fbm(vec3(v * uDetail, fi * 7.0 + uSeed * 13.0, uSeed * 3.0), 3, 2.0, 0.5);
-    a *= clamp(0.78 + 0.40 * (grain * 0.5 + 0.5), 0.0, 1.15);
+    a *= clamp(0.86 + 0.28 * (grain * 0.5 + 0.5), 0.0, 1.15);
 
     a = clamp(a, 0.0, 1.0);
     float c = w > 1e-5 ? clamp(1.0 - smoothstep(0.0, w * 0.5, d), 0.0, 1.0) : 0.0;
@@ -300,9 +302,9 @@ const FRAG_COLOR = /* glsl */ `
   // Per-strand tint: the instance attribute picks the family, the baked noise
   // scatters it so no two cards land on the same value.
   float hairMix = clamp(
-    0.5 + (hairStrand - 0.5) * uHairShape.y * 2.0
-        + (hairCoarse - 0.5) * 0.55
-        + (hairFine - 0.5) * 0.30,
+    0.5 + (hairStrand - 0.5) * uHairShape.y * 1.1
+        + (hairCoarse - 0.5) * 0.45
+        + (hairFine - 0.5) * 0.28,
     0.0, 1.0);
   vec3 hairAlbedo = mix(uHairTintLo, uHairTintHi, hairMix);
 
@@ -459,8 +461,11 @@ export function createHairMaterial(ctx, params = {}) {
     if (key === state.fibreKey && uniforms.uHairFibre.value) return uniforms.uHairFibre.value;
     const seed = hashSeed(`${colorHex}|${race}`);
     const tex = bakery.bake(key, FIBRE_FRAG, {
+      // Wide and short: the shader compresses U (across the strands, where the
+      // detail is) and stretches V, and every cached bake holds its render
+      // target for the session, so the maps stay small.
       width: 512,
-      height: 512,
+      height: 256,
       // Mirrored so the per-strand offset never exposes a hard wrap seam.
       wrap: THREE.MirroredRepeatWrapping,
       colorSpace: THREE.NoColorSpace,
@@ -486,7 +491,7 @@ export function createHairMaterial(ctx, params = {}) {
     const pale = clamp01((l - 0.55) / 0.35);
     const spread = 0.30 * p.spread;
 
-    material.color.setHSL(h, s, clamp01(l), THREE.SRGBColorSpace);
+    material.color.copy(tmpBase);
 
     uniforms.uHairTintLo.value.setHSL(
       clamp01(h - 0.008),
@@ -531,7 +536,7 @@ export function createHairMaterial(ctx, params = {}) {
     uniforms.uHairSpecA.value.set(0.36 * shine, p.exp1, -0.045, p.shiftNoise);
     uniforms.uHairSpecB.value.set(0.24 * shine, p.exp2, 0.070, 0.18);
     uniforms.uHairShape.value.set(p.rootDark, p.spread, p.rootRough, p.tipRough);
-    uniforms.uHairEdge.value.set(0.12, 0.30);
+    uniforms.uHairEdge.value.set(0.12, 0.24);
     uniforms.uHairMisc.value.set(0.85, 0.0);
     material.roughness = (p.rootRough + p.tipRough) * 0.5;
   }

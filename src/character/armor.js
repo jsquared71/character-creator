@@ -410,6 +410,7 @@ function metrics(joints, build, race) {
     { position: V3(-hipR * 0.55, 0, 0), side: -1 }
   ]).map((f) => ({
     p: V3().copy(f.position),
+    r: f.radius || 0,
     side: f.side || (f.position.x >= 0 ? 1 : -1)
   }));
 
@@ -442,8 +443,6 @@ function metrics(joints, build, race) {
   const hump = (t, back) => humpAmt * gauss(t - 0.92, 0.13) * Math.max(0, back);
 
   const chestW = torsoR(0.72);
-  const waistW = torsoR(0.30);
-  const depth = torsoAspect(0.40);
 
   const frameAt = (t) => {
     const tt = clamp01(t);
@@ -471,8 +470,8 @@ function metrics(joints, build, race) {
     hipsPos, hipR, neckPos, neckR,
     shoulders, hands, feet,
     shoulderX, shoulderR, shoulderY,
-    unit, torsoR, torsoAspect, torsoBack, hump,
-    chestW, waistW, hipW: torsoR(0.07), depth,
+    torsoR, torsoAspect, torsoBack, hump,
+    chestW,
     posture: b.posture || 0,
     legThick: b.legThick || 1,
     armThick: b.armThick || 1,
@@ -551,8 +550,6 @@ function buildChest(ctx) {
   const isCloth = A.tier === 'cloth';
   const isMail = A.tier === 'mail';
 
-  // half-width / half-depth control profiles across the covered span
-  const wCtrl = [
   const segs = T.segs;
   const rows = 14;
   const rowFrames = [];
@@ -805,7 +802,7 @@ function skirtTabard(ctx) {
       const y = top - len * vv - Math.abs(uu - 0.5) * len * 0.10;
       const bow = (1 - Math.abs(uu - 0.5) * 2) * 0.35;
       const fold = Math.sin(uu * Math.PI * 3) * 0.012 * u * smooth(vv);
-      const z = s * ((M.hipW * M.depth) * (1.10 + bow * 0.22) + fold + 0.045 * u * smooth(vv * 1.2));
+      const z = s * (f.rd * (1.10 + bow * 0.22) + fold + 0.045 * u * smooth(vv * 1.2));
       out.set(f.p.x + x, y, f.p.z + z * 1.0);
     }, {
       flip: s < 0,
@@ -1039,8 +1036,9 @@ function buildBoots(ctx) {
   for (const f of M.feet) {
     const soleY = Math.max(0, f.p.y - 0.01 * u);
     const footLen = M.H * 0.135 * (0.85 + 0.20 * M.legThick);
-    // half-width of the boot; every radius below is a true radius
-    const footW = M.H * 0.027 * lerp(1, M.legThick, 0.6) + T.offset * u * 0.30;
+    // half-width of the boot; every radius below is a true radius. body.js
+    // reports a foot radius — prefer it, since it already knows about hooves.
+    const footW = (f.r > 0 ? f.r * 1.06 : M.H * 0.027 * lerp(1, M.legThick, 0.6)) + T.offset * u * 0.30;
     const ankleH = M.H * 0.050 * (hoof ? 1.15 : 1.0);
     const shaftTop = soleY + M.H * (A.tier === 'cloth' ? 0.075 : hoof ? 0.10 : 0.16) * (0.85 + 0.3 * M.legThick);
 

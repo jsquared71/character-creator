@@ -132,7 +132,7 @@ const TIER_ART = {
 const TRIM_ART = {
   gilt:        { color: 0xffc44a, metal: 1.0,  rough: 0.11, emissive: 0.30, tinted: 0.0 },
   riveted:     { color: 0xc8ccd4, metal: 1.0,  rough: 0.19, emissive: 0.08, tinted: 0.0 },
-  runic:       { color: 0xd8c9ff, metal: 0.35, rough: 0.30, emissive: 0.55, tinted: 0.85 },
+  runic:       { color: 0xb9a8f0, metal: 0.35, rough: 0.30, emissive: 0.55, tinted: 0.85 },
   embroidered: { color: 0xe0bc72, metal: 0.28, rough: 0.38, emissive: 0.26, tinted: 0.35 },
   bone:        { color: 0xe6dcc2, metal: 0.05, rough: 0.52, emissive: 0.10, tinted: 0.0 },
   stitched:    { color: 0xc79a63, metal: 0.10, rough: 0.55, emissive: 0.06, tinted: 0.25 },
@@ -823,14 +823,17 @@ export function createArmorMaterial(ctx, params = {}) {
     U.uArmorEdgeHi.value = art.edgeHi;
     U.uArmorBareRough.value = art.bareRough;
     U.uArmorBareMetal.value = art.bareMetal;
-    U.uArmorTrimMetal.value = trim.metal;
-    U.uArmorTrimRough.value = trim.rough;
+    // Trim on a soft tier is metallic thread, not a chrome inlay: pull its
+    // metalness down and its roughness up in proportion to the tier's cloth
+    // content, or gilt reads as a plastic sticker on a robe.
+    U.uArmorTrimMetal.value = trim.metal * (1.0 - 0.72 * props.clothMix);
+    U.uArmorTrimRough.value = trim.rough + (0.46 - trim.rough) * props.clothMix * 0.85;
     U.uArmorAnisoGain.value = art.anisoGain;
     U.uArmorAnisoExp.value = art.anisoExp;
     U.uArmorFlowScale.value = 1.0;
 
     const emissive = typeof armor.emissive === 'number' ? armor.emissive : 0.2;
-    U.uArmorTrimEmissive.value = trim.emissive * (0.35 + 0.9 * emissive);
+    U.uArmorTrimEmissive.value = trim.emissive * (0.28 + 0.8 * emissive);
 
     // Class-coloured rim, scaled by the class's own emissive budget. Brighter
     // classes also get a slightly wider band.
