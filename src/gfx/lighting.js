@@ -16,10 +16,10 @@
 //
 // The rim now sits at THETA ~ 147deg in the face view (~131deg in the wider
 // hero view), so it wraps ~33deg / ~49deg and dies well before the cheek.
-// It is a SpotLight, not a DirectionalLight, for two further reasons: inverse
-// -square falloff keeps it off the backdrop behind the figure, and a wide cone
-// with a heavy penumbra puts the hot part of the rim on the head and shoulders
-// and lets it fade to about half by the boots.
+// It is a SpotLight, not a DirectionalLight, for two further reasons: it now
+// falls off with distance instead of lighting the whole scene equally, and a
+// wide cone with a heavy penumbra puts the hot part of the rim on the head and
+// shoulders and lets it fade to about half by the boots.
 //
 // The image-based lighting is baked, not loaded: an equirectangular
 // "ruined stone hall at dusk" is rendered by the Bakery in an RGBM-ish
@@ -41,7 +41,13 @@ const RIM_POS = new THREE.Vector3(0.85, 2.05, -3.70);
 // ~27deg, which is frontal enough to flatten) and dropped below the subject, so
 // it models the shadow cheek and the backs of the hands instead of washing them.
 const FILL_POS = new THREE.Vector3(2.30, 0.35, 1.35);
-const ACCENT_POS = new THREE.Vector3(-1.05, 0.78, -1.15);
+// Class-coloured practical behind the hip on the key side. It used to sit at
+// (-1.05, 0.78, -1.15), which put it 0.76 m from the nearest lit surface -- and
+// a point light with decay 2 at 0.76 m turns 3.2 cd into 5.7 lx, nearly twice
+// the key. On a hip that faced it the result clipped and the bloom pass smeared
+// it into a visible white orb. Moved out and up so the closest approach is
+// ~2.3 m, which both cuts the peak and flattens the gradient across the hip.
+const ACCENT_POS = new THREE.Vector3(-1.70, 1.30, -2.00);
 const AIM = new THREE.Vector3(0, 1.15, 0); // chest height of an average subject
 // The rim aims higher than the rest of the rig so its cone core lands on the
 // head and shoulders for every race from Gnome to Tauren.
@@ -56,6 +62,20 @@ const RIM_PENUMBRA = 0.65;
 // cannot be compared by eye with the key and fill, which are in lux. So MOODS
 // authors the rim in lux-at-the-aim-point and applyMoodSpec multiplies by d^2.
 const RIM_DIST2 = RIM_POS.distanceToSquared(RIM_AIM); // ~14.7 m^2
+// Same treatment for the accent, which is a PointLight and so also candela.
+const ACCENT_DIST2 = ACCENT_POS.distanceToSquared(AIM); // ~6.9 m^2
+// Nothing lit gets closer to the accent than roughly this, so this is what its
+// peak irradiance is actually governed by. Quoted rather than derived because
+// it depends on the character, which this module does not get to see: if the
+// figure ever grows past a 0.5 m half-width at the hip, re-measure it.
+const ACCENT_MIN_D2 = 5.4; // m^2, i.e. ~2.3 m
+// A point light this close to the subject is the one place in the rig where an
+// authoring mistake clips instead of just looking wrong, so the budget is
+// asserted rather than assumed: peak = accentI * ACCENT_DIST2 / ACCENT_MIN_D2,
+// and we want that comfortably under the key so it can never reach the bloom
+// threshold. At the values below it lands at 0.85-1.05 lx against a 3.2-3.55
+// key, roughly a sixth of the rig's total, which is what a practical should be.
+const ACCENT_PEAK_RATIO = ACCENT_DIST2 / ACCENT_MIN_D2; // ~1.28
 
 // Shadow camera is fitted to a ~3 m tall subject standing at the origin.
 const SUBJECT_HEIGHT = 3.0;
@@ -66,7 +86,8 @@ const FADE_SECONDS = 0.20;
 // the renderer's working space for us.
 //
 // All four intensities are in lux at the subject, so they can be read as a
-// ratio. rimI is converted to candela on the way into the SpotLight.
+// ratio. rimI and accentI are converted to candela on the way into their
+// (punctual) lights; keyI and fillI are directional and are already lux.
 //
 // The rim used to be the brightest light in the rig (3.6-4.1 lx flat over
 // every surface that faced it at all, against a 3.2-3.55 lx key). It is now
@@ -78,24 +99,29 @@ const FADE_SECONDS = 0.20;
 // pulled back to an edge the fill carries the shadow side on its own, so it is
 // up near 0.95 -- still under a third of the key, which is a modelling bounce,
 // not a frontal wash.
+//
+// accentI was 3.0-3.6 back when it was a bare candela figure sitting in a table
+// of lux, which read as "a bit dimmer than the key" and was in fact almost
+// twice it. As lux it belongs at a sixth of the key: a tint on the far hip, not
+// something the viewer reads as a lamp.
 const MOODS = {
   Alliance: {
     key: '#ffe2c2', keyI: 3.20,
     rim: '#6fa8e0', rimI: 3.95,
     fill: '#c3ad95', fillI: 0.96,
-    accent: '#3a6ea8', accentI: 3.20
+    accent: '#3a6ea8', accentI: 0.62
   },
   Horde: {
     key: '#ffc794', keyI: 3.55,
     rim: '#e0704a', rimI: 3.70,
     fill: '#c2967f', fillI: 0.92,
-    accent: '#a33232', accentI: 3.60
+    accent: '#a33232', accentI: 0.70
   },
   Neutral: {
     key: '#ffe8c0', keyI: 3.30,
     rim: '#9fb2da', rimI: 3.80,
     fill: '#b3a888', fillI: 0.94,
-    accent: '#c8b878', accentI: 3.00
+    accent: '#c8b878', accentI: 0.58
   }
 };
 
@@ -104,6 +130,23 @@ const QUALITY = {
   balanced:    { shadowMap: 1024, accent: 0.55, shadows: true },
   performance: { shadowMap: 512,  accent: 0.0, shadows: true }
 };
+
+// Largest excursion the accent's flicker can add on top of its authored level.
+const ACCENT_FLICKER_MAX = 1.15;
+// The accent may not exceed this share of its own mood's key at its closest
+// approach. Above roughly half the key it starts clipping on a hip that faces
+// it, and the bloom pass turns the clip into a visible orb.
+const ACCENT_PEAK_BUDGET = 0.35;
+
+for (const [name, m] of Object.entries(MOODS)) {
+  const peak = m.accentI * ACCENT_PEAK_RATIO * ACCENT_FLICKER_MAX;
+  if (peak > m.keyI * ACCENT_PEAK_BUDGET) {
+    console.warn(
+      `[lighting] ${name} accent peaks at ${peak.toFixed(2)} lx, over the ` +
+      `${(m.keyI * ACCENT_PEAK_BUDGET).toFixed(2)} lx budget; it will bloom.`
+    );
+  }
+}
 
 const IBL_WIDTH = 1024;
 const IBL_HEIGHT = 512;
@@ -288,9 +331,13 @@ export function createLighting({ scene, renderer, bakery }) {
   group.add(fill);
 
   // ---------------------------------------------------------------- accent --
-  // Class-coloured practical sitting low and behind, reading as a brazier or
-  // a rune on the floor. Disabled on the lower quality tiers.
-  const accent = new THREE.PointLight(0xc8b878, 3.0, 5.5, 2.0);
+  // Class-coloured practical sitting behind and out to the key side, reading as
+  // a brazier down the hall. Disabled on the lower quality tiers.
+  // distance 7.0 rather than 5.5: the light moved out to 2.6 m, and the cutoff
+  // window bites noticeably once the subject sits at ~40% of it.
+  const accent = new THREE.PointLight(
+    0xc8b878, MOODS.Neutral.accentI * ACCENT_DIST2, 7.0, 2.0
+  );
   accent.name = 'accent';
   accent.position.copy(ACCENT_POS);
   accent.castShadow = false;
@@ -511,7 +558,7 @@ function applyMoodSpec(dst, spec) {
   // MOODS authors the rim in lux at the aim point; three wants candela.
   dst.rim.set(spec.rim); dst.rimI = spec.rimI * RIM_DIST2;
   dst.fill.set(spec.fill); dst.fillI = spec.fillI;
-  dst.accent.set(spec.accent); dst.accentI = spec.accentI;
+  dst.accent.set(spec.accent); dst.accentI = spec.accentI * ACCENT_DIST2;
 }
 
 function copyMood(dst, src) {
