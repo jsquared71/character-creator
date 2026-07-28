@@ -842,12 +842,14 @@ function buildBelt(ctx) {
   // A buckle is jewellery on a belt, not a second belt: the prong used to be
   // 1.35 * 1.5 * the band height — an 18 cm mirror-metal slab standing on end,
   // which the bloom pass duly clipped to a white bar down the character's front.
-  const bw = M.hipR * 0.55, bh = h * 1.15;
+  const bw = M.hipR * 0.42, bh = h * 1.05;
   if (A.tier === 'plate' || A.tier === 'mail') {
-    const g = new THREE.CylinderGeometry(bw * 0.55, bw * 0.55, thick * 1.6, 8, 1);
-    part.add(facet(g), trs(buckleP, new THREE.Euler(Math.PI * 0.5, 0, 0), V3(1, 1, 1)), 1.0);
-    const g2 = new THREE.BoxGeometry(bw * 0.16, bh, thick * 1.8);
-    part.add(g2, place(buckleP.x, buckleP.y, buckleP.z), 1.0);
+    // Tilted off the key's axis on purpose: a 10 cm mirror-metal disc squared
+    // up to the light is a bloom source, not a buckle.
+    const g = new THREE.CylinderGeometry(bw * 0.52, bw * 0.52, thick * 1.6, 8, 1);
+    part.add(facet(g), trs(buckleP, new THREE.Euler(Math.PI * 0.5 - 0.22, 0, 0.18), V3(1, 1, 1)), 1.0);
+    const g2 = new THREE.BoxGeometry(bw * 0.16, bh, thick * 1.7);
+    part.add(g2, trs(buckleP, new THREE.Euler(-0.22, 0, 0.18), V3(1, 1, 1)), 1.0);
   } else {
     const g = new THREE.BoxGeometry(bw, bh, thick * 1.4);
     part.add(g, place(buckleP.x, buckleP.y, buckleP.z), 1.0);
@@ -1148,16 +1150,19 @@ function buildBracers(ctx) {
     const armLen = dir.length() || M.H * 0.4;
     dir.normalize();
     const wrist = h.p.clone().addScaledVector(dir, -h.r * 1.15);
-    const elbow = root.clone().addScaledVector(dir, armLen * 0.52);
+    // A cloth sleeve carries on up past the elbow into the shoulder drape; a
+    // plate vambrace stops at the joint.
+    const elbow = root.clone().addScaledVector(dir, armLen * (A.tier === 'cloth' ? 0.44 : 0.52));
     const pts = [];
     const segs = 5;
     for (let i = 0; i <= segs; i++) pts.push(elbow.clone().lerp(wrist, i / segs));
-    // `h.r` is the HAND radius, which is noticeably fatter than the wrist it
-    // hangs off; taking it as the cuff radius is what made the vambraces read
-    // as drainpipes. Both radii are now fractions of it that land a centimetre
-    // clear of the lofted forearm.
-    const rWrist = h.r * 0.82 + T.offset * u * 0.22;
-    const rElbow = h.r * 1.06 * lerp(1, M.armThick, 0.4) + T.offset * u * 0.30;
+    // `h.r` is the hand joint's PALM ENVELOPE, which is roughly twice the wrist
+    // it hangs off; taking it as the cuff radius is what made the vambraces
+    // read as drainpipes. Both radii are fractions of it, chosen against the
+    // lofted forearm (wrist ~0.55 h.r, muscle belly ~1.0 h.r on a Human) so the
+    // sleeve clears the arm by about a centimetre and no more.
+    const rWrist = h.r * 0.62 + T.offset * u * 0.22;
+    const rElbow = h.r * 0.86 * lerp(1, M.armThick, 0.4) + T.offset * u * 0.30;
 
     const flareTop = A.tier === 'plate' ? 1.18 : A.tier === 'cloth' ? 1.28 : 1.08;
     const bracer = sweep(framesAlong(pts, V3(h.side, 0, 0)), ellipse(12, 1, 0.90), {
@@ -1216,21 +1221,36 @@ function buildBoots(ctx) {
     // half-width of the boot; every radius below is a true radius. body.js
     // reports a foot radius — prefer it, since it already knows about hooves.
     const legR = f.r > 0 ? f.r : M.H * 0.033 * lerp(1, M.legThick, 0.6);
-    const footW = legR * 1.08 + T.offset * u * 0.28;
+    const footW = legR * 1.16 + T.offset * u * 0.28;
     // Ankle and calf are NOT the foot. The greave used to be `footW * 1.34`,
     // i.e. a 20 cm-wide tube wrapped around a 7 cm shin, which is why the boots
     // read as two blobs stuck on the ends of the legs. A foot is roughly twice
     // as wide as the ankle it stands on and half again as wide as the calf, so
     // the shaft radii below are fractions of the reported foot half-width and
     // the greave sits ~1.5 cm proud of the leg instead of 5 cm.
-    const ankleR = legR * (hoof ? 1.06 : 0.66);
-    const calfR = legR * (hoof ? 1.18 : 0.95);
-    const ankleH = M.H * 0.042 * (hoof ? 1.15 : 1.0);
+    const ankleR = legR * (hoof ? 1.06 : 0.72);
+    const calfR = legR * (hoof ? 1.24 : 1.12);
+    // Height of the sabaton box. Has to clear the instep the body lofts, which
+    // crests around 0.09 m on a 1.89 m Human — anything less and the bare foot
+    // pushes out through the top of the boot.
+    const ankleH = M.H * 0.060 * (hoof ? 1.15 : 1.0);
     const shaftTop = soleY + M.H * (A.tier === 'cloth' ? 0.075 : hoof ? 0.10 : 0.16) * (0.85 + 0.3 * M.legThick);
+    // The reported foot position is the ground CONTACT point, roughly under the
+    // arch; the ankle joint sits a good way behind it. Standing the greave up
+    // on the contact point left the achilles outside the tube and the bare heel
+    // showed through from behind.
+    const ankleZ = f.p.z - (hoof ? 0 : footLen * 0.16);
+    // Legs splay: the body carries them from the foot out under the hip, so a
+    // greave extruded straight up off the foot walks out of the calf on the way
+    // to the knee. Lean the shaft along that axis.
+    const hipY = Math.max(M.hipsPos.y, 1e-3);
+    const legTopX = M.hipsPos.x + (f.side >= 0 ? 1 : -1) * M.hipR * 0.45;
 
     if (!hoof) {
-      // foot: swept from heel to toe with a flat sole
-      const z0 = f.p.z - footLen * 0.36, z1 = f.p.z + footLen * 0.64;
+      // foot: swept from heel to toe with a flat sole. The span has to reach
+      // the whole sole the body lofted, heel included.
+      const z0 = f.p.z - footLen * 0.58, z1 = f.p.z + footLen * 0.74;
+      const HGT = [[0, 1.55], [0.30, 1.00], [0.72, 0.82], [1, 0.44]];
       const fr = [];
       const steps = 6;
       for (let i = 0; i <= steps; i++) fr.push(V3(f.p.x, soleY, lerp(z0, z1, i / steps)));
@@ -1238,11 +1258,11 @@ function buildBoots(ctx) {
         capStart: true, capEnd: true,
         scale: (t) => {
           // section is a unit rounded rect (half-extent 0.5), so pass full sizes
-          const w = 2 * footW * profile(t, [[0, 0.72], [0.30, 1.0], [0.72, 1.0], [1, 0.62]]);
-          const hgt = ankleH * profile(t, [[0, 1.25], [0.35, 0.95], [0.75, 0.72], [1, 0.48]]);
+          const w = 2 * footW * profile(t, [[0, 0.68], [0.30, 1.0], [0.78, 1.02], [1, 0.62]]);
+          const hgt = ankleH * profile(t, HGT);
           return [w, hgt];
         },
-        offset: (t) => [0, ankleH * profile(t, [[0, 1.25], [0.35, 0.95], [0.75, 0.72], [1, 0.48]]) * 0.5],
+        offset: (t) => [0, ankleH * profile(t, HGT) * 0.5],
         // toe cap only — the sabaton's own edges are real geometry, not mask
         trim: (s, t) => (1 - smooth((1 - t) / 0.14)) * (A.tier === 'plate' ? 0.95 : 0.4),
         // low crease angle: the sole and the two side panels have to stay flat
@@ -1255,10 +1275,16 @@ function buildBoots(ctx) {
     // shaft
     const pts = [];
     const sSteps = 5;
-    const ankleY = soleY + ankleH * (hoof ? 0.5 : 0.9);
+    const ankleY = soleY + ankleH * (hoof ? 0.5 : 0.75);
     for (let i = 0; i <= sSteps; i++) {
       const t = i / sSteps;
-      pts.push(V3(f.p.x, lerp(ankleY, shaftTop, t), f.p.z + (hoof ? 0.01 * u : -footLen * 0.06 * t)));
+      const y = lerp(ankleY, shaftTop, t);
+      const k = clamp01(y / hipY);
+      pts.push(V3(
+        lerp(f.p.x, legTopX, k),
+        y,
+        lerp(ankleZ, M.hipsPos.z, k * 0.8) + (hoof ? 0.01 * u : 0)
+      ));
     }
     const rBase = ankleR;
     const rTop = calfR * (A.tier === 'plate' ? 1.22 : A.tier === 'cloth' ? 1.38 : 1.10);
@@ -1280,13 +1306,22 @@ function buildBoots(ctx) {
       const cop = new THREE.SphereGeometry(rTop * 0.88, 8, 6, 0, TAU, 0, Math.PI * 0.58);
       const q = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), V3(0, 0.35, 1).normalize());
       const cy = Math.max(shaftTop - rTop * 0.20, soleY + rTop * 1.05);
-      part.add(facet(cop), mat().compose(V3(f.p.x, cy, f.p.z + rTop * 0.22), q, V3(1, 1.15, 0.9)), 0.5);
+      const ck = clamp01(cy / hipY);
+      part.add(facet(cop), mat().compose(
+        V3(lerp(f.p.x, legTopX, ck), cy, lerp(ankleZ, M.hipsPos.z, ck * 0.8) + rTop * 0.22),
+        q, V3(1, 1.15, 0.9)
+      ), 0.5);
     } else if (A.tier === 'leather' || A.tier === 'mail') {
       for (let k = 0; k < 2; k++) {
-        const y = lerp(ankleY, shaftTop, 0.35 + k * 0.42);
-        const r = lerp(rBase, rTop, 0.35 + k * 0.42) * 1.1;
+        const tt = 0.35 + k * 0.42;
+        const y = lerp(ankleY, shaftTop, tt);
+        const r = lerp(rBase, rTop, smooth(Math.pow(tt, 0.75))) * 1.1;
+        const rk = clamp01(y / hipY);
         const ring = new THREE.TorusGeometry(r, 0.011 * u, 4, 10);
-        part.add(ring, trs(V3(f.p.x, y, f.p.z), new THREE.Euler(Math.PI * 0.5, 0, 0), V3(1, 1, 1)), 0.8);
+        part.add(ring, trs(
+          V3(lerp(f.p.x, legTopX, rk), y, lerp(ankleZ, M.hipsPos.z, rk * 0.8)),
+          new THREE.Euler(Math.PI * 0.5, 0, 0), V3(1, 1, 1)
+        ), 0.8);
       }
     }
   }
