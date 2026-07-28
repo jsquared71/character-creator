@@ -448,7 +448,7 @@ function headParams(F, faceIndex, headR, gaunt) {
     eyeX: (0.315 + 0.075 * snout) * fv.eyeSpread,   // R units, from the midline
     eyeTilt: fv.eyeTilt,
     eyeSize: fv.eyeSize,
-    eyeR: headR * 0.115 * fv.eyeSize,
+    eyeR: headR * 0.122 * fv.eyeSize,
     eyeSink: headR * 0.055 * fv.eyeSize,
 
     flat,
@@ -624,8 +624,8 @@ function headSurface(P, theta, phi) {
 
     // Rhinarium: a raised leather pad with two nostril pits, at the tip.
     const padY = P.snoutY + 0.20;
-    z += R * 0.150 * P.muzzle * blob2(ax, dY(uy, padY), 0.190, 0.115) * faceM;
-    z -= R * 0.100 * P.muzzle * blob2(ax - 0.105, dY(uy, padY) + 0.060, 0.050, 0.036) * faceM;
+    z += R * 0.165 * P.muzzle * blob2(ax, dY(uy, padY), 0.200, 0.120) * faceM;
+    z -= R * 0.130 * P.muzzle * blob2(ax - 0.120, dY(uy, padY) + 0.065, 0.055, 0.040) * faceM;
   }
 
   /* ---- mouth --------------------------------------------------------------*/
@@ -635,13 +635,13 @@ function headSurface(P, theta, phi) {
   {
     const mw = 0.185 * P.mouthW;
     const across = superG(ax, mw, 4) * faceM;
-    const bow = dY(uy, P.mouthY) + 0.035 * Math.pow(sat(ax / mw), 2);
+    const bow = dY(uy, P.mouthY) + 0.015 * Math.pow(sat(ax / mw), 2);
     z += R * 0.072 * P.lip * gauss(bow - 0.058, 0.045) * across;   // upper lip
     z += R * 0.080 * P.lip * gauss(bow + 0.065, 0.050) * across;   // lower lip
-    const line = gauss(bow, 0.026) * across;
-    z -= R * 0.100 * line;
+    const line = gauss(bow, 0.026 + 0.014 * P.muzzle) * across;
+    z -= R * (0.100 + 0.055 * P.muzzle) * line;
     y -= R * 0.012 * line;
-    z -= R * 0.042 * blob2(ax - mw * 0.94, bow, 0.050, 0.036) * faceM;  // corners
+    z -= R * 0.032 * blob2(ax - mw * 0.94, bow, 0.050, 0.036) * faceM;  // corners
     z -= R * 0.070 * gauss(bow + 0.160, 0.050) * across;                // mentolabial
   }
 
@@ -651,7 +651,7 @@ function headSurface(P, theta, phi) {
   y -= R * 0.022 * P.chin * chinB;
   // Submental shelf: the underside of the chin has to fall away or the jaw and
   // the throat merge into one column.
-  z -= R * 0.070 * blob2(ax, dY(uy, P.chinY) + 0.190, 0.230, 0.090) * faceM;
+  z -= R * 0.045 * blob2(ax, dY(uy, P.chinY) + 0.165, 0.230, 0.095) * faceM;
 
   /* ---- neck stump ---------------------------------------------------------*/
   // The bottom of the skull is not a pole, it is a stump that plugs the neck.
@@ -882,30 +882,33 @@ function buildEars(mb, kind, P, headR) {
   }
 }
 
-/** Lower-jaw tusks (orcish/trollish) or upper fangs when there is a muzzle. */
+/**
+ * Lower-jaw tusks (orcish/trollish) or downward fangs when there is a muzzle.
+ * They are anchored on the corners of the mouth the head actually has, and kept
+ * short — a tusk that reaches the brow hides the whole face in a close-up.
+ */
 function buildTusks(mb, P, headR, down) {
   const R = headR;
+  const uy = clamp(P.mouthY + (down ? 0.04 : -0.03), -0.90, 0.90);
+  const phi = Math.acos(uy);
+  const sp = Math.max(0.25, Math.sin(phi));
+  const theta = Math.asin(clamp((0.205 * P.mouthW * R) / P.rx / sp, -0.95, 0.95));
   for (const side of [-1, 1]) {
-    const theta = side * (0.36 + 0.22 * P.snout);
-    const yn = down ? P.snoutY + 0.18 : P.snoutY - 0.16;
-    const root = headSurface(P, theta, Math.acos(clamp(yn, -0.95, 0.95)));
-    root.multiplyScalar(0.94);
-    let keys;
-    if (down) {
-      keys = [
-        root,
-        root.clone().add(V3(side * 0.02 * R, -0.16 * R, 0.02 * R)),
-        root.clone().add(V3(side * 0.05 * R, -0.34 * R, -0.03 * R))
-      ];
-    } else {
-      keys = [
-        root,
-        root.clone().add(V3(side * 0.06 * R, 0.20 * R, 0.04 * R)),
-        root.clone().add(V3(side * 0.14 * R, 0.46 * R, -0.02 * R)),
-        root.clone().add(V3(side * 0.20 * R, 0.66 * R, -0.14 * R))
-      ];
-    }
-    tube(mb, keys, [[0, R * 0.115], [0.45, R * 0.085], [1, R * 0.012]], {
+    const root = headSurface(P, side * theta, phi);
+    root.multiplyScalar(0.95);
+    const len = R * (down ? 0.30 : 0.34);
+    const keys = down
+      ? [
+          root,
+          root.clone().add(V3(side * 0.02 * R, -len * 0.55, 0.02 * R)),
+          root.clone().add(V3(side * 0.06 * R, -len, -0.03 * R))
+        ]
+      : [
+          root,
+          root.clone().add(V3(side * 0.035 * R, len * 0.52, 0.025 * R)),
+          root.clone().add(V3(side * 0.095 * R, len, -0.045 * R))
+        ];
+    tube(mb, keys, [[0, R * 0.080], [0.45, R * 0.058], [1, R * 0.010]], {
       radial: 8,
       segments: 8,
       capEnd: 'round',
