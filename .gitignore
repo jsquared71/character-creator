@@ -1,0 +1,6 @@
+# Reference screenshots used only by the critic sub-agent for blind comparison.
+# Never redistributed, never used as source art. See docs/AAA_PROMPT.md.
+refs/
+
+node_modules/
+.DS_Store
