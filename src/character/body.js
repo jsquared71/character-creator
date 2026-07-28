@@ -806,6 +806,29 @@ function laplacianSmooth(geometry, iterations, strength) {
   pos.needsUpdate = true;
 }
 
+/**
+ * Any vertex whose incident triangles are all degenerate (the pinched poles of
+ * the skull, which sit buried inside the neck) comes out of
+ * computeVertexNormals with a zero normal, which would be a NaN in the shader.
+ * Fall back to the radial direction there.
+ */
+function sanitizeNormals(geometry) {
+  const nrm = geometry.attributes.normal;
+  const pos = geometry.attributes.position;
+  geometry.computeBoundingSphere();
+  const c = geometry.boundingSphere.center;
+  const v = V3();
+  for (let i = 0; i < nrm.count; i++) {
+    const l = Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
+    if (l > 1e-6) continue;
+    v.set(pos.getX(i) - c.x, pos.getY(i) - c.y, pos.getZ(i) - c.z);
+    if (v.lengthSq() < 1e-12) v.set(0, 1, 0);
+    v.normalize();
+    nrm.setXYZ(i, v.x, v.y, v.z);
+  }
+  nrm.needsUpdate = true;
+}
+
 /* -------------------------------------------------------------------------- */
 /* main                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1334,6 +1357,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
   laplacianSmooth(geometry, 3, 0.55);
   geometry.deleteAttribute('aSmooth');
   geometry.computeVertexNormals();
+  sanitizeNormals(geometry);
 
   // --- exact height normalisation -------------------------------------------
   geometry.computeBoundingBox();
@@ -1370,7 +1394,13 @@ export function buildBodyGeometry(build, features, opts = {}) {
     })),
     hands: joints.hands.map((h) => ({ position: fix(h.position), radius: h.radius * scale, side: h.side })),
     hips: { position: fix(V3(0, hipY, pelvisZ)), radius: hipR * scale },
-    feet: joints.feet.map((f) => ({ position: fix(f.position), radius: f.radius * scale, side: f.side })),
+    // Ground contact is reported dead on y = 0 so boots and greaves can sit on
+    // the floor plane without a per-race fudge.
+    feet: joints.feet.map((f) => {
+      const position = fix(f.position);
+      position.y = 0;
+      return { position, radius: f.radius * scale, side: f.side };
+    }),
     eyes: joints.eyes.map((e) => ({
       position: fix(e.position),
       radius: e.radius * scale,

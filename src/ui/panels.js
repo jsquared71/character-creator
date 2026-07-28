@@ -1147,7 +1147,8 @@ export function buildUI({ store }) {
 
   /* ---------- left rail: race + class ---------- */
 
-  const racePanel = section('Race');
+  const selectPanel = el('section', 'panel');
+  selectPanel.append(el('h2', 'panel-title', { text: 'Race' }), el('div', 'rule', { 'aria-hidden': 'true' }));
   const raceGrid = el('div', 'grid grid-race', { role: 'radiogroup', 'aria-label': 'Race' });
   const raceTiles = races.map((r) => {
     const b = el('button', 'tile tile-race', {
@@ -1162,10 +1163,13 @@ export function buildUI({ store }) {
     raceGrid.append(b);
     return { btn: b, art, race: r };
   });
-  wireRoving(raceGrid, () => 3);
-  racePanel.append(raceGrid);
+  wireRoving(raceGrid, () => 4);
+  selectPanel.append(raceGrid);
+  selectPanel.append(
+    el('h2', 'panel-title panel-title-2', { text: 'Class' }),
+    el('div', 'rule', { 'aria-hidden': 'true' })
+  );
 
-  const classPanel = section('Class');
   const classGrid = el('div', 'grid grid-class', { role: 'radiogroup', 'aria-label': 'Class' });
   const classTiles = classes.map((k) => {
     const b = el('button', 'tile tile-class', {
@@ -1183,16 +1187,16 @@ export function buildUI({ store }) {
   });
   wireRoving(classGrid, () => 5);
   const classCaption = el('p', 'caption', { 'aria-live': 'polite' });
-  classPanel.append(classGrid, classCaption);
+  selectPanel.append(classGrid, classCaption);
 
-  railL.append(racePanel, classPanel);
+  railL.append(selectPanel);
 
   /* ---------- right rail: appearance ---------- */
 
   const formPanel = section('Appearance');
 
   // gender
-  const genderRow = el('div', 'ctl');
+  const genderRow = el('div', 'ctl ctl-gender');
   genderRow.append(el('span', 'ctl-label', { text: 'Body Type' }));
   const genderGroup = el('div', 'seg seg-wide', { role: 'radiogroup', 'aria-label': 'Body type' });
   const genderBtns = GENDERS.map((gname) => {

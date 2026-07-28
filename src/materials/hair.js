@@ -28,24 +28,6 @@ import * as THREE from 'three';
 const DEFAULT_COLOR = '#3a2a1e';
 const DEFAULT_RACE = 'Human';
 
-// --- spine workaround ------------------------------------------------------
-// three r180 unconditionally emits `float luminance( const in vec3 rgb )` into
-// every fragment shader prefix (WebGLProgram.getLuminanceFunction), and
-// src/gfx/glsl/noise.js ends with `float luminance(vec3 c)`. NOISE_GLSL is
-// prepended to every Bakery shader, so *every* bake in the project currently
-// fails to compile with:
-//     ERROR: 'luminance' : function already has a body
-// The real fix is one line in src/gfx/glsl/noise.js (rename it, or wrap it in
-// `#ifndef TONE_MAPPING`), which this module does not own.
-//
-// The Bakery emits its uniform declarations immediately before NOISE_GLSL, so
-// a declaration name that carries a #define renames the noise-library copy out
-// of the way before it is parsed. Passing this as the first uniform key is the
-// only lever a material module has on the text ahead of NOISE_GLSL. It stays
-// harmless once noise.js is fixed.
-const NOISE_LUMINANCE_SHIM =
-  'uHairShimUnused;\n#define luminance noiseLibLuminance\nfloat uHairShimPad';
-
 // Per-race strand character. `strands` is how many hairs the card texture
 // draws across one quad; `wave` how much they wander; `stretch` how elongated
 // the fibre noise is along the strand; `shine` scales both specular lobes.
@@ -458,7 +440,6 @@ export function createHairMaterial(ctx, params = {}) {
       wrap: THREE.ClampToEdgeWrapping,
       colorSpace: THREE.NoColorSpace,
       uniforms: {
-        [NOISE_LUMINANCE_SHIM]: 0.0,
         uCount: p.strands,
         uThick: p.thick,
         uWave: p.wave,
@@ -484,7 +465,6 @@ export function createHairMaterial(ctx, params = {}) {
       wrap: THREE.MirroredRepeatWrapping,
       colorSpace: THREE.NoColorSpace,
       uniforms: {
-        [NOISE_LUMINANCE_SHIM]: 0.0,
         uScale: 24.0,
         uStretch: p.stretch,
         uSeed: seed

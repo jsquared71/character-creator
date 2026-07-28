@@ -70,7 +70,33 @@ const ALBEDO_CACHE_MAX = 32;
 // ---------------------------------------------------------------------------
 // Bake shaders. `fragBody` is a statement list — the Bakery wraps it in main()
 // and prepends the noise library, so no helper functions can be declared here.
+//
+// The bakes address regions of the UV atlas declared in character/body.js:
+//
+//   head   u 0.00..0.50  v 0.50..1.00   (local u 0.5 = face front, v 1 = crown)
+//   torso  u 0.50..1.00  v 0.50..1.00
+//   arms   v 0.25..0.50 (u < 0.5)   legs v 0.25..0.50 (u > 0.5)
+//   hands / feet / ears / horns / tusks / tail   all in the v 0.125..0.25 row
+//   detail strip                                v 0.00..0.125
+//
+// So "every extremity" is one horizontal band, and the T-zone is a vertical
+// strip through the head island. If that atlas ever moves, the masks degrade to
+// harmless low-contrast noise — the object-space face mask and the curvature
+// term in the surface shader carry the same intent independently of UVs.
 // ---------------------------------------------------------------------------
+
+// Reusable snippet: remaps a global UV into head-island-local coordinates and
+// reports whether we are inside it at all.
+const HEAD_LOCAL = /* glsl */ `
+  float inHead = step(uv.x, 0.5) * step(0.5, uv.y);
+  vec2 hp = vec2(uv.x * 2.0, (uv.y - 0.5) * 2.0);
+  float faceFront = 1.0 - smoothstep(0.10, 0.38, abs(hp.x - 0.5));
+`;
+
+// Reusable snippet: the atlas row that holds every extremity island.
+const EXTREMITY_ROW = /* glsl */ `
+  float extremityRow = smoothstep(0.118, 0.148, uv.y) * (1.0 - smoothstep(0.232, 0.262, uv.y));
+`;
 
 // Penner's pre-integrated diffusion ramp.
 //
@@ -124,13 +150,20 @@ const ALBEDO_FRAG = /* glsl */ `
 
   vec3 col = uTone * (1.0 + (drift * 0.115 + mott * 0.075 + grain * 0.038) * uMottle);
 
-  // Capillary blush. Broken-up patches of reddening plus a bias toward the
-  // extremes of the UV sheet, where limb and head islands tend to land.
+  // Capillary blush. Broken-up patches everywhere, then hard reddening on the
+  // extremity row (hands, feet, ear blades, tusks, tail) and across the nose,
+  // cheeks and lips of the head island.
+${EXTREMITY_ROW}
+${HEAD_LOCAL}
+  float midFace = smoothstep(0.24, 0.36, hp.y) * (1.0 - smoothstep(0.50, 0.66, hp.y));
+  float region = max(extremityRow, inHead * faceFront * midFace * 0.9);
+
   float blushN = fbm(p * 4.1 + 21.7, 4, 2.10, 0.55) * 0.5 + 0.5;
-  float rim = max(smoothstep(0.70, 1.0, uv.y), smoothstep(0.30, 0.0, uv.y));
-  rim = max(rim, max(smoothstep(0.78, 1.0, uv.x), smoothstep(0.22, 0.0, uv.x)));
-  float blush = clamp(blushN * 0.65 + rim * 0.55, 0.0, 1.0) * uBlush;
-  col = mix(col, col * uBlushTint, blush * 0.30);
+  float blush = clamp(blushN * 0.35 + region * 0.85, 0.0, 1.0) * uBlush;
+  col = mix(col, col * uBlushTint, blush * 0.34);
+
+  // Knuckles and ear rims also darken slightly, not just redden.
+  col *= 1.0 - extremityRow * 0.06 * uBlush;
 
   // Pigment specks / freckles: only a fraction of the cells fire.
   vec3 fw = worley(vec3(uv, uSeed * 0.37), 96.0);
@@ -218,12 +251,19 @@ const ROUGH_FRAG = /* glsl */ `
   vec3 cw = worley(vec3(uv, uSeed), uPoreScale);
   r += (1.0 - smoothstep(0.0, 0.55, cw.x)) * 0.07;
 
-  // Sebaceous T-zone. The body unwrap is owned by another module so this is a
-  // gentle, noise-broken guess at where the head island sits; the object-space
-  // face mask in the surface shader does the accurate work.
-  float head = smoothstep(uHeadBand.x, uHeadBand.y, uv.y);
-  float tz = head * (0.5 + 0.5 * (fbm(vec3(uv * 10.0, uSeed + 8.0), 3, 2.2, 0.5) * 0.5 + 0.5));
-  r -= tz * 0.10 * uOil;
+  // Sebaceous T-zone: the vertical strip up the front of the head island from
+  // the nose bridge to the hairline. uHeadBand carries that local-v span.
+${HEAD_LOCAL}
+  float band = smoothstep(uHeadBand.x, uHeadBand.x + 0.10, hp.y)
+             * (1.0 - smoothstep(uHeadBand.y - 0.10, uHeadBand.y, hp.y));
+  float centre = 1.0 - smoothstep(0.0, 0.15, abs(hp.x - 0.5));
+  float tz = inHead * faceFront * band * (0.55 + 0.45 * centre);
+  tz *= 0.6 + 0.4 * (fbm(vec3(uv * 26.0, uSeed + 8.0), 3, 2.2, 0.5) * 0.5 + 0.5);
+  r -= tz * 0.20 * uOil;
+
+  // Palms, soles and ear rims are drier and more matte than the rest.
+${EXTREMITY_ROW}
+  r += extremityRow * 0.06;
 
   if (uWeather > 0.001) {
     r += (ridged(vec3(uv * 8.0, uSeed + 2.0), 3, 2.2, 0.5) - 0.55) * uWeather * 0.22;
@@ -243,10 +283,18 @@ const THICK_FRAG = /* glsl */ `
   float n = fbm(vec3(uv * 3.4, uSeed + 13.0), 4, 2.1, 0.55) * 0.5 + 0.5;
   float t = 0.42 + n * 0.36;
 
-  // Island borders in a body unwrap are overwhelmingly extremities - ear rims,
-  // fingertips, nostrils - so let those bleed harder.
-  float edge = 1.0 - smoothstep(0.0, 0.14, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-  t = mix(t, 0.96, edge * 0.40);
+  // The extremity row is where light genuinely punches through: ear blades,
+  // fingertips, the webbing between digits. Open it right up.
+${EXTREMITY_ROW}
+  t = mix(t, 0.98, extremityRow * 0.85);
+
+  // Nose wings and lips on the head island get most of the way there too.
+${HEAD_LOCAL}
+  float nose = smoothstep(0.26, 0.38, hp.y) * (1.0 - smoothstep(0.46, 0.62, hp.y));
+  t = mix(t, 0.88, inHead * faceFront * nose * 0.7);
+
+  // The crown of the skull is the thickest thing on the body.
+  t *= 1.0 - inHead * smoothstep(0.80, 0.98, hp.y) * 0.35;
 
   // Veining: thin, high-contrast filaments where light punches through.
   float vein = ridged(vec3(uv * 7.0, uSeed + 21.0), 4, 2.3, 0.55);
@@ -497,7 +545,8 @@ export function createSkinMaterial(ctx, params = {}) {
     return tex;
   }
 
-  const HEAD_BAND = new THREE.Vector2(0.68, 0.94);
+  // Local-v span of the head island's T-zone: nose bridge up to the hairline.
+  const T_ZONE_V = new THREE.Vector2(0.34, 0.82);
   // A warm, slightly saturated multiplier standing in for capillary blood.
   const BLUSH_TINT = new THREE.Color(1.22, 0.80, 0.72);
 
@@ -555,7 +604,7 @@ export function createSkinMaterial(ctx, params = {}) {
         uRoughBase: tuning.rough,
         uOil: tuning.oil,
         uPoreScale: 200.0 * tuning.pore,
-        uHeadBand: HEAD_BAND,
+        uHeadBand: T_ZONE_V,
         uWeather: weather,
         uScales: scales,
         uScaleFreq: 46.0 + weather * 8.0

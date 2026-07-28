@@ -528,7 +528,7 @@ function buildChest(ctx) {
   // half-width / half-depth control profiles across the covered span
   const wCtrl = [
     [0.00, M.hipW * 1.02], [0.18, M.waistW * 1.00], [0.45, M.chestW * 0.94],
-    [0.72, M.chestW * 1.00], [0.90, M.chestW * 0.82], [1.00, M.neckR * 1.55]
+    [0.72, M.chestW * 1.00], [0.90, M.chestW * 0.82], [1.00, M.neckR * 1.38]
   ];
   const dCtrl = [
     [0.00, 1.02], [0.35, 0.98], [0.70, 1.06], [1.00, 0.94]
@@ -570,7 +570,7 @@ function buildChest(ctx) {
   // collar / gorget
   if (T.collar > 0.2) {
     const top = M.frameAt(0.995);
-    const cr = M.neckR * (isCloth ? 1.85 : 1.45) + off;
+    const cr = M.neckR * (isCloth ? 1.50 : 1.30) + off;
     const ch = M.neckR * (isCloth ? 1.5 : 0.9) * T.collar;
     const frames = [];
     const rowsC = 5;
@@ -584,7 +584,7 @@ function buildChest(ctx) {
     const collar = surface(16, rowsC, (uu, vv, out) => {
       const f = frames[Math.round(vv * rowsC)];
       const th = TAU * uu + Math.PI * 0.5;
-      const flareC = 1 + (isCloth ? 0.85 : 0.30) * Math.pow(vv, 2);
+      const flareC = 1 + (isCloth ? 0.50 : 0.22) * Math.pow(vv, 2);
       const dip = 1 - 0.35 * Math.max(0, Math.sin(th)) * vv;   // open at the throat
       const r = cr * flareC * dip;
       out.set(
@@ -1087,8 +1087,8 @@ function buildCape(ctx) {
 
   const tattered = A.tier === 'cloth';
   const short = A.tier === 'leather';
-  const len = M.H * (short ? 0.46 : tattered ? 0.62 : 0.66);
-  const spanTop = M.shoulderX * (short ? 1.20 : 1.55);
+  const len = M.H * (short ? 0.42 : tattered ? 0.62 : 0.66);
+  const spanTop = M.shoulderX * (short ? 0.95 : 1.48);
   const wrap = 0.85;   // radians of curl around the back
 
   const capeGeo = surface(16, 18, (uu, vv, out) => {
@@ -1293,15 +1293,15 @@ function pauldronDraped(part, S, ctx, trimFn) {
   });
   part.add(cap, trs(V3(S * 0.24, S * 0.14, 0), new THREE.Euler(0, 0, -0.42), V3(1, 1, 1)));
   const drape = surface(9, 9, (uu, vv, out) => {
-    const a = lerp(-1.35, 1.35, uu);
-    const r = S * (0.98 + 0.18 * vv) * (1 - 0.12 * Math.pow(vv, 2));
-    const fall = S * 1.85 * Math.pow(vv, 1.06);
+    const a = lerp(-1.5, 1.5, uu);                       // front .. back around the arm
+    const r = S * (0.95 + 0.20 * vv);
+    const fall = S * 1.95 * Math.pow(vv, 1.05);
     const wave = Math.sin(uu * TAU * 2.0 + vv * 1.4) * S * 0.10 * smooth(vv);
     const hemDip = Math.pow(Math.sin(uu * Math.PI), 0.6);
     out.set(
-      S * 0.30 + r * 0.55 * Math.cos(a) * (1 - 0.25 * vv) + wave * 0.5,
+      S * 0.26 + r * 0.82 * Math.cos(a * 0.55) + wave * 0.4,
       S * 0.08 - fall * (0.75 + 0.35 * hemDip),
-      r * Math.sin(a) * 1.05 + wave
+      r * Math.sin(a) + wave
     );
   }, {
     flip: true,
