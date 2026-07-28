@@ -32,6 +32,7 @@
   --sans: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
 
   --rail-w: clamp(276px, 25vw, 340px);
+  --label-w: 74px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   color-scheme: dark;
@@ -474,15 +475,16 @@ body {
 }
 .ctl:last-child { margin-bottom: 0; }
 
-.ctl-slider { grid-template-columns: minmax(0, auto) minmax(0, 1fr) 54px; }
-.ctl-step { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
-.ctl-swatch { grid-template-columns: minmax(0, auto) minmax(0, 1fr); }
+/* One shared label column keeps every row's control edge on the same axis. */
+.ctl-slider { grid-template-columns: var(--label-w) minmax(0, 1fr) 52px; }
+.ctl-step { grid-template-columns: var(--label-w) minmax(0, 1fr); }
+.ctl-swatch { grid-template-columns: var(--label-w) minmax(0, 1fr); }
 .ctl-gender { grid-template-columns: minmax(0, 1fr); }
 
 .ctl-label {
   font-family: var(--serif);
-  font-size: 11.5px;
-  letter-spacing: 0.11em;
+  font-size: 11px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-2);
   text-shadow: 0 1px 0 #000;
@@ -631,28 +633,29 @@ body {
 
 /* Toggles ---------------------------------------------------------------- */
 
-.ctl-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ctl-toggles { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
 
 .toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 1 1 auto;
-  gap: 6px;
-  padding: 5px 6px;
+  gap: 5px;
+  padding: 5px 5px;
   border: 1px solid rgba(122, 100, 54, 0.6);
   background: linear-gradient(180deg, rgba(22, 22, 30, 0.9), rgba(6, 7, 12, 0.94));
   color: var(--ink-3);
   font-family: var(--serif);
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
+  font-size: 10px;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
   cursor: pointer;
   transition: color 130ms var(--ease), border-color 130ms var(--ease), background 130ms var(--ease);
 }
 .toggle-box {
   position: relative;
-  width: 15px; height: 15px;
+  width: 14px; height: 14px;
   flex: none;
   border: 1px solid rgba(160, 132, 66, 0.85);
   background: linear-gradient(180deg, #0b0c11, #16171f);
@@ -669,7 +672,7 @@ body {
   content: "";
   position: absolute;
   left: 4px; top: 0px;
-  width: 5px; height: 9px;
+  width: 4px; height: 8px;
   border: solid #241a05;
   border-width: 0 2px 2px 0;
   transform: rotate(42deg);

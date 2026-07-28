@@ -705,17 +705,27 @@ function drawPortrait(cv, race) {
 
   drawEars(g, f.ears, cx, headCy, headR, skin);
 
-  // hair mass / mane
+  // hair mass: a crown with side falls and a fringe cut across the brow,
+  // rather than a swim-cap ellipse
+  const fall = f.ears === 'side-long' || snout > 0.6 ? 0.12 : 0.42;
   g.beginPath();
-  g.ellipse(cx, headCy - headR * 0.5, headR * 0.95, headR * 0.62, 0, Math.PI, Math.PI * 2);
-  g.fillStyle = hair;
+  g.moveTo(cx - headR * 0.97, headCy + headR * fall);
+  g.quadraticCurveTo(cx - headR * 1.06, headCy - headR * 0.98, cx, headCy - headR * 1.1);
+  g.quadraticCurveTo(cx + headR * 1.06, headCy - headR * 0.98, cx + headR * 0.97, headCy + headR * fall);
+  g.quadraticCurveTo(cx + headR * 0.8, headCy - headR * 0.1, cx + headR * 0.68, headCy - headR * 0.36);
+  g.quadraticCurveTo(cx + headR * 0.3, headCy - headR * 0.12, cx, headCy - headR * 0.2);
+  g.quadraticCurveTo(cx - headR * 0.3, headCy - headR * 0.05, cx - headR * 0.68, headCy - headR * 0.36);
+  g.quadraticCurveTo(cx - headR * 0.8, headCy - headR * 0.1, cx - headR * 0.97, headCy + headR * fall);
+  g.closePath();
+  const hairG = g.createLinearGradient(cx - headR, headCy - headR, cx + headR * 0.6, headCy + headR * 0.4);
+  hairG.addColorStop(0, sh(hair, 0.3));
+  hairG.addColorStop(0.45, hair);
+  hairG.addColorStop(1, sh(hair, -0.32));
+  g.fillStyle = hairG;
   g.fill();
-  g.globalAlpha = 0.5;
-  g.fillStyle = sh(hair, 0.2);
-  g.beginPath();
-  g.ellipse(cx - headR * 0.3, headCy - headR * 0.72, headR * 0.34, headR * 0.16, -0.3, 0, Math.PI * 2);
-  g.fill();
-  g.globalAlpha = 1;
+  g.lineWidth = 1;
+  g.strokeStyle = 'rgba(0,0,0,0.5)';
+  g.stroke();
 
   // brow shelf
   if (f.brow > 0.05) {
@@ -897,10 +907,10 @@ function drawClassIcon(cv, klass) {
       g.fill();
       break;
     case 'Shaman':
-      fillPoly([[56, 10], [30, 54], [46, 54], [40, 90], [70, 42], [52, 42]]);
-      g.lineWidth = 5 * u;
-      stroke(14, 30, 26, 30);
-      stroke(74, 70, 86, 70);
+      fillPoly([[58, 8], [28, 54], [46, 54], [40, 92], [72, 44], [54, 44]]);
+      g.lineWidth = 4 * u;
+      arc(50, 50, 42, Math.PI * 0.62, Math.PI * 0.92);
+      arc(50, 50, 42, Math.PI * 1.62, Math.PI * 1.92);
       break;
     case 'Mage':
       g.lineWidth = 6 * u;

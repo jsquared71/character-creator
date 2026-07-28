@@ -100,34 +100,31 @@ const CARD_FRAG = /* glsl */ `
     float wander = sin(v * (2.0 + r2 * 5.0) + r3 * 6.2831853) * uWave * (0.15 + 0.85 * v);
     float cx = slot + (r1 - 0.5) * (0.85 / uCount) + wander;
 
-    // Width: tapers toward the tip, each strand a different gauge.
-    float w = (0.5 / uCount) * mix(0.30, 0.95, r3) * uThick;
-    float taper = pow(1.0 - v, 0.55);
-    w *= max(taper, 0.02);
-
-    // Strands stop at different heights so the card end is ragged, not flat.
-    float len = mix(0.55, 1.0, r2);
-    float endFade = 1.0 - smoothstep(len * 0.72, len, v);
+    // Each strand ends at its own height and tapers to nothing there, so the
+    // card end is a spray of points rather than a chopped-off band.
+    float len = mix(0.62, 1.0, r2);
+    float along = clamp(v / len, 0.0, 1.0);
+    float taper = pow(1.0 - along, 0.45);
+    float w = (0.5 / uCount) * mix(0.35, 1.0, r3) * uThick * taper;
 
     float d = abs(u - cx);
-    float a = 1.0 - smoothstep(w * 0.30, w, d);
-    a *= endFade;
+    float a = w > 1e-5 ? 1.0 - smoothstep(w * 0.55, w, d) : 0.0;
 
     // Fine break-up along the strand so it is not a clean airbrushed line.
     float grain = fbm(vec3(v * uDetail, fi * 7.0 + uSeed * 13.0, uSeed * 3.0), 3, 2.0, 0.5);
-    a *= clamp(0.80 + 0.35 * (grain * 0.5 + 0.5), 0.0, 1.2);
+    a *= clamp(0.78 + 0.40 * (grain * 0.5 + 0.5), 0.0, 1.15);
 
     a = clamp(a, 0.0, 1.0);
-    float c = clamp((1.0 - smoothstep(0.0, w * 0.5, d)) * endFade, 0.0, 1.0);
+    float c = w > 1e-5 ? clamp(1.0 - smoothstep(0.0, w * 0.5, d), 0.0, 1.0) : 0.0;
 
     if (a > alpha) sid = r1;
     alpha = max(alpha, a);
     core = max(core, c);
   }
 
-  // Soft card borders: the quad edge must never show as a straight cut.
+  // Soft card borders in U only — the root edge stays dense so the hair meets
+  // the scalp without a gap.
   alpha *= smoothstep(0.0, 0.03, u) * (1.0 - smoothstep(0.97, 1.0, u));
-  alpha *= smoothstep(0.0, 0.02, v) * (1.0 - smoothstep(0.90, 1.0, v));
   alpha = clamp(alpha, 0.0, 1.0);
 
   gl_FragColor = vec4(core, alpha, sid, alpha);
@@ -148,10 +145,13 @@ const FIBRE_FRAG = /* glsl */ `
   float coarse = fbm(vec3(vUv.x * 2.2, vUv.y * 1.4, uSeed * 7.0), 3, 2.0, 0.55);
   float micro = fibre(p * 8.0, dir, uStretch * 1.7, 3);
 
-  float r = clamp(fine * 0.5 + 0.5, 0.0, 1.0);
-  float g = clamp(mix(mid * 0.5 + 0.5, band, 0.45), 0.0, 1.0);
-  float b = clamp(coarse * 0.5 + 0.5, 0.0, 1.0);
-  float a = clamp(micro * 0.5 + 0.5, 0.0, 1.0);
+  // fbm returns roughly +/-0.35, so each channel is gained up before it is
+  // centred — otherwise every map sits in a narrow band around 0.5 and drives
+  // no visible variation at all.
+  float r = clamp(fine * 1.30 + 0.5, 0.0, 1.0);
+  float g = clamp(mix(mid * 1.40 + 0.5, (band - 0.55) * 2.2 + 0.5, 0.45), 0.0, 1.0);
+  float b = clamp(coarse * 1.70 + 0.5, 0.0, 1.0);
+  float a = clamp(micro * 1.15 + 0.5, 0.0, 1.0);
 
   gl_FragColor = vec4(r, g, b, a);
 `;
