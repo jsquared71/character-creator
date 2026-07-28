@@ -138,18 +138,18 @@ const SCLERA_FRAG = /* glsl */ `
   float r = length(p);
   vec2 d = r > 1e-5 ? p / r : vec2(0.0, 1.0);
 
-  vec3 col = mix(vec3(0.928, 0.918, 0.898), vec3(0.862, 0.752, 0.700),
-                 smoothstep(0.10, 0.46, r));
-  col = mix(col, vec3(0.620, 0.412, 0.378), smoothstep(0.40, 0.62, r));
+  vec3 col = mix(vec3(0.935, 0.928, 0.912), vec3(0.888, 0.808, 0.762),
+                 smoothstep(0.12, 0.48, r));
+  col = mix(col, vec3(0.660, 0.470, 0.430), smoothstep(0.42, 0.64, r));
 
   vec3 q = vec3(p * 4.5, 0.31);
   float warp = fbm(q * 1.7, 4, 2.1, 0.55);
   float v1 = ridged(q * 2.2 + warp * 0.60, 5, 2.15, 0.50);
   float v2 = ridged(q * 5.6 + warp * 0.95, 4, 2.30, 0.50);
-  float veins = smoothstep(0.80, 0.99, v1) * 0.90 + smoothstep(0.87, 1.0, v2) * 0.55;
-  veins *= smoothstep(0.11, 0.38, r);              // nothing crosses the cornea
-  veins *= 0.45 + 0.55 * abs(d.x);                 // densest toward the corners
-  col = mix(col, vec3(0.560, 0.105, 0.100), clamp(veins, 0.0, 1.0) * 0.62);
+  float veins = smoothstep(0.83, 0.995, v1) * 0.90 + smoothstep(0.90, 1.0, v2) * 0.50;
+  veins *= smoothstep(0.16, 0.46, r);              // nothing crosses the cornea
+  veins *= 0.22 + 0.78 * abs(d.x);                 // densest toward the corners
+  col = mix(col, vec3(0.605, 0.235, 0.205), clamp(veins, 0.0, 1.0) * 0.42);
 
   col *= 1.0 + 0.055 * fbm(vec3(p * 9.0, 2.0), 4, 2.0, 0.5);
   col *= 1.0 - 0.10 * smoothstep(0.30, 0.55, r);
@@ -268,9 +268,9 @@ EyeData sampleEyeSurface() {
                               + 0.030 * sin(pa * 7.0 - 0.4)
                               + 0.018 * sin(pa * 13.0 + 2.1));
   float pupil = smoothstep(pr - 0.075, pr + 0.055, ir);
-  // A glowing eye loses most of its pupil contrast — Night Elves have no
-  // visible pupil at all.
-  pupil = mix(pupil, mix(pupil, 1.0, 0.62), uEyeGlow);
+  // A glowing eye loses most of its pupil contrast — Night Elves barely have
+  // a visible pupil at all.
+  pupil = mix(pupil, mix(pupil, 1.0, 0.45), uEyeGlow);
   irisCol *= mix(0.030, 1.0, pupil);
 
   // --- limbal ring --------------------------------------------------------
@@ -298,10 +298,13 @@ EyeData sampleEyeSurface() {
   float core  = pow(clamp(1.0 - ir * 0.86, 0.0, 1.0), 4.0);
   float body  = smoothstep(1.16, 0.0, ir) * irisMask;
   float pulse = 0.88 + 0.12 * uEyePulse;
-  e.emissive = uEyeGlowColor * uEyeGlow * pulse *
-               (0.60 * body + 2.30 * core + 0.34 * bleed);
+  // Fibres and crypts modulate the glow, and the limbal ring still cuts it, so
+  // even a fully self-lit eye keeps its iris drawing instead of blooming flat.
+  float structMod = mix(0.40, 1.45, irisStruct) * mix(1.0, 0.16, limbal * 0.9);
+  e.emissive = uEyeGlowColor * uEyeGlow * pulse * structMod *
+               (0.62 * body + 2.10 * core * mix(0.55, 1.0, pupil) + 0.34 * bleed);
   // Vivid eyes wash their own iris toward the glow hue.
-  albedo = mix(albedo, mix(albedo, uEyeGlowColor, 0.30), uEyeGlow * irisMask);
+  albedo = mix(albedo, mix(albedo, uEyeGlowColor, 0.20), uEyeGlow * irisMask);
 
   // --- surface ------------------------------------------------------------
   e.albedo = albedo;

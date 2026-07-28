@@ -307,8 +307,10 @@ const FRAG_SURFACE = /* glsl */ `
 	float skCurvRaw = length( fwidth( skN ) ) / max( length( fwidth( vSkPos ) ), 1e-4 );
 	skCurvature = clamp( skCurvRaw * uSkCurvGain, 0.0, 1.0 );
 
+	// Wide band on purpose: uSkBodyHeight is the race baseline, while the live
+	// figure carries a +/-18% height slider and a per-race head scale on top.
 	float skYn = clamp( vSkPos.y / max( uSkBodyHeight, 0.1 ), 0.0, 1.0 );
-	float skHead = smoothstep( 0.79, 0.885, skYn );
+	float skHead = smoothstep( 0.68, 0.86, skYn );
 	float skFace = skHead * smoothstep( 0.02, 0.62, skN.z );
 	float skTZone = skFace * ( 0.50 + 0.50 * skCurvature );
 

@@ -149,7 +149,6 @@ body {
   background: linear-gradient(168deg, var(--panel-a), var(--panel-b));
   backdrop-filter: blur(7px) saturate(0.85);
   -webkit-backdrop-filter: blur(7px) saturate(0.85);
-  background-clip: padding-box;
 }
 
 .panel::before {
@@ -180,9 +179,9 @@ body {
 .rule {
   height: 22px;
   margin: 0 0 10px;
-  background: var(--divider) center / auto 22px no-repeat;
+  background: var(--divider) center / 100% 22px no-repeat;
 }
-.rule-soft { height: 18px; margin: 12px 0 10px; opacity: 0.72; background-size: auto 18px; }
+.rule-soft { height: 18px; margin: 12px 0 10px; opacity: 0.72; background-size: 100% 18px; }
 
 .caption {
   margin: 9px 2px 0;
@@ -215,14 +214,6 @@ body {
   background:
     linear-gradient(180deg, rgba(4, 5, 9, 0.94) 0%, rgba(4, 5, 9, 0.7) 62%, rgba(4, 5, 9, 0) 100%);
   border-bottom: 0;
-}
-.titlebar::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0;
-  height: 22px;
-  margin-top: 0;
-  pointer-events: none;
 }
 
 .title-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
