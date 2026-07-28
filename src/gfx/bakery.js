@@ -32,6 +32,10 @@ export class Bakery {
     this.scene.add(this.quad);
     this.cache = new Map();
     this.bakeCount = 0;
+    // A failed bake produces a blank texture rather than an exception, so the
+    // only signal is three's compile diagnostic. Make sure nothing has turned
+    // it off — the screenshot harness fails the run on any console error.
+    renderer.debug.checkShaderErrors = true;
   }
 
   /**
@@ -73,6 +77,10 @@ export class Bakery {
         precision highp float;
         varying vec2 vUv;
         ${uniformDecls}
+        // three injects its own float luminance(const in vec3) above this
+        // point. Map bare calls onto ours so both can coexist; the definition
+        // three emitted is already past, so it is untouched by this define.
+        #define luminance noiseLuminance
         ${NOISE_GLSL}
         void main() {
         ${fragBody}

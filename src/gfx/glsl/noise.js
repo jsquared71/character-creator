@@ -90,5 +90,12 @@ vec3 normalFromHeights(float hL, float hR, float hD, float hU, float strength) {
   return n * 0.5 + 0.5;
 }
 
-float luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// NOTE: named noiseLuminance, not luminance. three r180's WebGLProgram
+// unconditionally injects `float luminance( const in vec3 rgb )` into every
+// fragment prefix (getLuminanceFunction, three.module.js:6412 — it is not
+// gated on tone mapping). Declaring `luminance` here collides with it and the
+// shader fails to compile, which for a bake means a silently blank texture.
+// Bakery emits `#define luminance noiseLuminance` so callers may still write
+// `luminance(...)` and get this one.
+float noiseLuminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 `;

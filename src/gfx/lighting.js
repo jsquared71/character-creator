@@ -18,7 +18,7 @@ import * as THREE from 'three';
 // --- rig geometry (metres, Y-up, feet at y=0, character faces +Z) -----------
 // Camera lives around (+x, +z), so camera-left is roughly -x/+z.
 const KEY_POS = new THREE.Vector3(-2.60, 3.55, 2.05);
-const RIM_POS = new THREE.Vector3(2.35, 1.30, -3.05);
+const RIM_POS = new THREE.Vector3(2.95, 1.05, -2.30);
 const FILL_POS = new THREE.Vector3(1.85, 0.50, 2.40);
 const ACCENT_POS = new THREE.Vector3(-1.05, 0.78, -1.15);
 const AIM = new THREE.Vector3(0, 1.15, 0); // chest height of an average subject
@@ -33,19 +33,19 @@ const FADE_SECONDS = 0.20;
 const MOODS = {
   Alliance: {
     key: '#ffe2c2', keyI: 3.20,
-    rim: '#6fa8e0', rimI: 3.30,
+    rim: '#6fa8e0', rimI: 4.10,
     fill: '#8ea6c6', fillI: 0.62,
     accent: '#3a6ea8', accentI: 3.20
   },
   Horde: {
     key: '#ffc794', keyI: 3.55,
-    rim: '#e0704a', rimI: 3.05,
+    rim: '#e0704a', rimI: 3.80,
     fill: '#c2967f', fillI: 0.58,
     accent: '#a33232', accentI: 3.60
   },
   Neutral: {
     key: '#ffe8c0', keyI: 3.30,
-    rim: '#9fb2da', rimI: 2.85,
+    rim: '#9fb2da', rimI: 3.60,
     fill: '#b3a888', fillI: 0.60,
     accent: '#c8b878', accentI: 3.00
   }
@@ -172,9 +172,6 @@ export function createLighting({ scene, renderer, bakery }) {
   const group = new THREE.Group();
   group.name = 'lighting-rig';
 
-  const keyDir = KEY_POS.clone().sub(AIM).normalize();
-  const rimDir = RIM_POS.clone().sub(AIM).normalize();
-
   // --------------------------------------------------------------- targets --
   const target = new THREE.Object3D();
   target.name = 'lighting-aim';
@@ -188,12 +185,11 @@ export function createLighting({ scene, renderer, bakery }) {
   key.target = target;
   key.castShadow = true;
 
-  // Fit the shadow frustum to a ~3 m subject: anything looser wastes texels
-  // and brings back the acne we just tuned away.
-  // The key sits ~36 deg above the horizon, so in the shadow camera's own
-  // frame the subject occupies the upper half and its cast on the floor
-  // trails off below — hence the asymmetric top/bottom. Snug either way:
-  // ~1.8 mm per texel horizontally at 2048.
+  // Fit the shadow frustum to a ~3 m subject; anything looser just wastes
+  // texels. The key sits ~36 deg above the horizon, so in the shadow camera's
+  // own frame the subject fills the upper half while its cast on the floor
+  // trails off below — hence the asymmetric top/bottom. ~1.8 mm per texel
+  // horizontally at 2048.
   const dist = KEY_POS.distanceTo(AIM);
   const sc = key.shadow.camera;
   sc.left = -SUBJECT_HEIGHT * 0.60;
@@ -339,7 +335,7 @@ function buildEnvironment(renderer, bakery) {
 
   try {
     const packed = bakery.bake(
-      'ibl-stonehall-dusk-v1',
+      'ibl-stonehall-dusk-v2',
       IBL_FRAG,
       {
         width: IBL_WIDTH,
