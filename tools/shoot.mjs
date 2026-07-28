@@ -111,11 +111,24 @@ const report = { ready, errors, warnings, shots: [], perf: null };
 
 if (ready) {
   if (args.race || args.class) {
+    // Mirror what the UI does on a race change: adopt that race's own
+    // palette. store.set({race}) alone leaves the previous race's colours,
+    // which made every --race shot render in Human tan and was misreported
+    // twice as a skin-shader bug.
     await page.evaluate(([race, klass]) => {
+      const store = window.__creator.store;
       const patch = {};
-      if (race) patch.race = race;
       if (klass) patch.class = klass;
-      window.__creator.store.set(patch);
+      if (race) {
+        patch.race = race;
+        const r = store.allRaces.find((x) => x.name === race);
+        if (r) {
+          patch.skin = r.skinTones[1] ?? r.skin;
+          patch.hair = r.hairColors[0];
+          patch.eyes = r.eyeColors[0];
+        }
+      }
+      store.set(patch);
     }, [args.race || null, args.class || null]);
   }
 
