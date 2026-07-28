@@ -53,7 +53,7 @@ const DEFAULT_TONE = '#e1b899';
 // Texture budgets. Normal carries the pore detail so it gets the most texels;
 // the translucency mask is low frequency and cheap.
 const ALBEDO_SIZE = 1024;
-const NORMAL_SIZE = 1024;
+const NORMAL_SIZE = 2048;
 const ROUGH_SIZE = 1024;
 const THICK_SIZE = 512;
 
@@ -66,6 +66,11 @@ const LUT_H = 64;
 // the only one that can multiply out. 32 keeps every race the user is likely to
 // revisit resident while capping VRAM at a few hundred MB worst case.
 const ALBEDO_CACHE_MAX = 32;
+
+// Normal / roughness / thickness only vary with race and feature flags, but the
+// normal map is 2048 square, so each resident race costs ~21 MB of it with mips.
+// Eight covers "flip through the roster and come back" without unbounded VRAM.
+const DETAIL_CACHE_MAX = 8;
 
 // ---------------------------------------------------------------------------
 // Bake shaders. `fragBody` is a statement list — the Bakery wraps it in main()
@@ -87,10 +92,23 @@ const ALBEDO_CACHE_MAX = 32;
 
 // Reusable snippet: remaps a global UV into head-island-local coordinates and
 // reports whether we are inside it at all.
+//
+// The head island is a full 360-degree sweep, so local u is an *angular*
+// fraction: one unit of u is a whole turn, u = 0.5 is dead ahead, and the flat
+// facial plane only spans about +/- 40 degrees, i.e. u = 0.5 +/- 0.11. The
+// first version faded faceFront out over 0.10..0.38, which is still half-on at
+// the ears and only reaches zero 137 degrees off the midline — every "face"
+// effect wrapped most of the way around the skull as a horizontal band. That
+// band is what flattened the mid-face.
+//
+// Local v is latitude: uy = -cos(v * PI), v = 1 at the crown. Human landmarks:
+//   chin 0.215   mouth 0.320   nose base 0.376   nose tip 0.411
+//   eyes 0.515   brow 0.554    hairline 0.650    crown 1.000
 const HEAD_LOCAL = /* glsl */ `
   float inHead = step(uv.x, 0.5) * step(0.5, uv.y);
   vec2 hp = vec2(uv.x * 2.0, (uv.y - 0.5) * 2.0);
-  float faceFront = 1.0 - smoothstep(0.10, 0.38, abs(hp.x - 0.5));
+  float hAx = abs(hp.x - 0.5);
+  float faceFront = 1.0 - smoothstep(0.060, 0.155, hAx);
 `;
 
 // Reusable snippet: the atlas row that holds every extremity island.
@@ -142,41 +160,67 @@ const ALBEDO_FRAG = /* glsl */ `
   vec2 uv = vUv;
   vec3 p = vec3(uv, uSeed);
 
-  // Three octave bands of dermal unevenness: broad tonal drift, medium
-  // mottling, then a fine grain that survives into the face close-up.
-  float drift = fbm(p * 2.4, 5, 2.05, 0.55);
-  float mott  = fbm(p * 9.0 + 11.3, 4, 2.30, 0.50);
-  float grain = fbm(p * 38.0 + 3.1, 3, 2.40, 0.55);
+  // Dermal unevenness. Skin varies mostly in *hue* and only slightly in value;
+  // the first pass spent 0.23 of luminance on three noise bands whose middle
+  // octave landed at roughly one cycle per cheek, which is the exact frequency
+  // the eye reads as a blotch rather than as skin. Value variation is now a
+  // fifth of that and the medium band has been pushed up to a frequency that
+  // reads as texture, with the removed contrast moved into a warm/cool drift.
+  float drift = fbm(p * 2.2, 4, 2.05, 0.55);
+  float mott  = fbm(p * 17.0 + 11.3, 3, 2.30, 0.50);
+  float grain = fbm(p * 62.0 + 3.1, 2, 2.40, 0.55);
 
-  vec3 col = uTone * (1.0 + (drift * 0.115 + mott * 0.075 + grain * 0.038) * uMottle);
+  vec3 col = uTone * (1.0 + (drift * 0.048 + mott * 0.026 + grain * 0.018) * uMottle);
+  // Perfusion drift: warmer where blood runs close, cooler over bone. Same
+  // energy as a luminance wobble but it reads as living tissue, not paint.
+  vec3 warmCool = mix(vec3(0.975, 1.005, 1.030), vec3(1.045, 0.988, 0.958),
+                      drift * 0.5 + 0.5);
+  col *= mix(vec3(1.0), warmCool, clamp(uMottle, 0.0, 1.4));
 
-  // Capillary blush. Broken-up patches everywhere, then hard reddening on the
-  // extremity row (hands, feet, ear blades, tusks, tail) and across the nose,
-  // cheeks and lips of the head island.
+  // Capillary blush. Real blush is three soft spots — the apples of the cheeks,
+  // the tip of the nose and the lips — not a band across the whole mid-face.
 ${EXTREMITY_ROW}
 ${HEAD_LOCAL}
-  float midFace = smoothstep(0.24, 0.36, hp.y) * (1.0 - smoothstep(0.50, 0.66, hp.y));
-  float region = max(extremityRow, inHead * faceFront * midFace * 0.9);
+  float cy = (hp.y - 0.452) / 0.070;
+  float cx = (hAx - 0.082) / 0.050;
+  float cheeks = exp(-cy * cy) * exp(-cx * cx);
+  float ny = (hp.y - 0.402) / 0.042;
+  float nx = (hp.x - 0.5) / 0.034;
+  float noseTip = exp(-ny * ny) * exp(-nx * nx);
+  float ly = (hp.y - 0.322) / 0.030;
+  float lx = (hp.x - 0.5) / 0.055;
+  float lips = exp(-ly * ly) * exp(-lx * lx);
+  float faceBlush = inHead * faceFront * max(cheeks * 0.70, max(noseTip * 0.85, lips * 0.60));
 
-  float blushN = fbm(p * 4.1 + 21.7, 4, 2.10, 0.55) * 0.5 + 0.5;
-  float blush = clamp(blushN * 0.35 + region * 0.85, 0.0, 1.0) * uBlush;
-  col = mix(col, col * uBlushTint, blush * 0.34);
+  // Extremities redden too, but the hand island butts straight onto the arm
+  // island in the atlas: pushing it to 0.85 put a hard colour step at the
+  // wrist. Kept low enough that the seam reads as skin tone, not as a glove.
+  float region = max(extremityRow * 0.58, faceBlush);
+
+  float blushN = fbm(p * 5.6 + 21.7, 3, 2.10, 0.55) * 0.5 + 0.5;
+  float blush = clamp(blushN * 0.14 + region, 0.0, 1.0) * uBlush;
+  col = mix(col, col * uBlushTint, blush * 0.26);
 
   // Knuckles and ear rims also darken slightly, not just redden.
-  col *= 1.0 - extremityRow * 0.06 * uBlush;
+  col *= 1.0 - extremityRow * 0.03 * uBlush;
 
-  // Pigment specks / freckles: only a fraction of the cells fire.
-  vec3 fw = worley(vec3(uv, uSeed * 0.37), 96.0);
-  float speck = smoothstep(0.34, 0.0, fw.x) * step(0.74, fw.z);
-  col *= 1.0 - speck * 0.20 * uMottle;
+  // Pigment specks / freckles. Denser and far shallower: at 96 cells across the
+  // atlas a speck was ~11 texels wide on the face and 20% dark, which at face
+  // framing is a mole, not a freckle.
+  vec3 fw = worley(vec3(uv, uSeed * 0.37), 168.0);
+  float speck = smoothstep(0.30, 0.0, fw.x) * step(0.80, fw.z);
+  col *= 1.0 - speck * 0.075 * uMottle;
 
-  // Heavy brow => weathered hide: coarse ridged shading, a touch desaturated.
+  // Heavy brow => weathered hide: ridged shading, a touch desaturated. The
+  // frequencies here matter more than the amplitude — at 6.5 cycles across the
+  // atlas a "weathering" ridge was a cheek wide, so an Orc came out in camo
+  // patches. Weathering belongs in the normal map; the albedo only tints it.
   if (uWeather > 0.001) {
-    float weather = ridged(p * 6.5 + 7.7, 4, 2.20, 0.55);
-    col = mix(col, col * (0.76 + 0.40 * weather), uWeather);
-    col = mix(col, vec3(luminance(col)), uWeather * 0.16);
-    float pit = worley(vec3(uv, uSeed + 5.0), 34.0).x;
-    col *= 1.0 - smoothstep(0.45, 0.0, pit) * uWeather * 0.14;
+    float weather = ridged(p * 22.0 + 7.7, 3, 2.20, 0.55);
+    col = mix(col, col * (0.90 + 0.17 * weather), uWeather);
+    col = mix(col, vec3(luminance(col)), uWeather * 0.14);
+    float pit = worley(vec3(uv, uSeed + 5.0), 110.0).x;
+    col *= 1.0 - smoothstep(0.38, 0.0, pit) * uWeather * 0.07;
   }
 
   // Scaled races: worley plates with darker seams and per-cell tonal variation.
@@ -194,6 +238,16 @@ ${HEAD_LOCAL}
 
 // Pore normal. Four taps of a height field, central differences, packed by the
 // noise library's normalFromHeights (OpenGL green-up convention).
+//
+// Everything in here is deliberately *shallow*. The head island is a quarter of
+// the sheet and the face is a fraction of that again, so a pore only gets a
+// couple of texels, and at a couple of texels a deep dip is not a pore: the
+// central difference tilts the normal 25-30 degrees and it renders as a black
+// speck. The first pass ran 200 cells across a 1024 sheet (five texels a pore)
+// at full depth, on top of an fbm micro-relief band of nearly the same
+// amplitude an octave below — and that band, not the pores, is what produced
+// the quilted, blotchy surface. Pore depth is now a third of the relief budget
+// and the micro-relief is a tenth of what it was.
 const NORMAL_FRAG = /* glsl */ `
   float h0 = 0.0, h1 = 0.0, h2 = 0.0, h3 = 0.0;
 
@@ -210,23 +264,28 @@ const NORMAL_FRAG = /* glsl */ `
     // so the field never reads as a regular grid.
     vec3 cw = worley(p, uPoreScale);
     float open = step(0.34, fract(cw.z * 7.31 + uSeed));
-    float pore = (1.0 - smoothstep(0.0, 0.62, cw.x)) * open;
-    float h = -pore * uPoreDepth;
+    float pore = (1.0 - smoothstep(0.0, 0.42, cw.x)) * open;
+    float h = -pore * 0.70 * uPoreDepth;
 
     // Coarser cell borders - the shallow creases that divide skin into plates.
-    vec3 bw = worley(p + vec3(3.7, 1.9, 0.0), uPoreScale * 0.26);
-    h -= (1.0 - smoothstep(0.0, 0.30, bw.y - bw.x)) * 0.38;
+    // Raised from 0.26x to 0.55x of the pore frequency: at 0.26x these were
+    // half-centimetre furrows on a face, which is a quilt, not skin.
+    vec3 bw = worley(p + vec3(3.7, 1.9, 0.0), uPoreScale * 0.55);
+    h -= (1.0 - smoothstep(0.0, 0.26, bw.y - bw.x)) * 0.110;
 
     // Micro relief, an octave above the pores so mips fold it away at distance.
-    h += fbm(vec3(uv * uPoreScale * 0.9, uSeed * 1.7), 3, 2.4, 0.55) * 0.55;
+    h += fbm(vec3(uv * uPoreScale * 1.15, uSeed * 1.7), 2, 2.4, 0.55) * 0.075;
 
     if (uWeather > 0.001) {
-      h += (ridged(vec3(uv * 30.0, uSeed + 2.3), 3, 2.2, 0.50) - 0.62) * uWeather * 0.95;
+      h += (ridged(vec3(uv * 96.0, uSeed + 2.3), 3, 2.2, 0.50) - 0.62) * uWeather * 0.16;
     }
     if (uScales > 0.001) {
       vec3 sw = worley(p + vec3(9.1, 4.3, 0.0), uScaleFreq);
-      float sh = -(1.0 - smoothstep(0.0, 0.34, sw.y - sw.x)) * 1.15
-                 + (1.0 - sw.x) * 0.55 + sw.z * 0.25;
+      // Scale plates are a genuine macro feature, so they keep a much larger
+      // share of the relief budget than pores do - but the budget itself is
+      // now a third of what it was, so these come down with it.
+      float sh = -(1.0 - smoothstep(0.0, 0.34, sw.y - sw.x)) * 0.42
+                 + (1.0 - sw.x) * 0.20 + sw.z * 0.09;
       h = mix(h, sh, uScales);
     }
 
@@ -241,32 +300,44 @@ const NORMAL_FRAG = /* glsl */ `
 
 const ROUGH_FRAG = /* glsl */ `
   vec2 uv = vUv;
-  float broad = fbm(vec3(uv * 5.5, uSeed), 4, 2.10, 0.55) * 0.5 + 0.5;
-  float fine  = fbm(vec3(uv * 24.0, uSeed + 4.0), 3, 2.40, 0.50) * 0.5 + 0.5;
+  float broad = fbm(vec3(uv * 7.0, uSeed), 3, 2.10, 0.55) * 0.5 + 0.5;
+  float fine  = fbm(vec3(uv * 44.0, uSeed + 4.0), 3, 2.40, 0.50) * 0.5 + 0.5;
 
   float r = uRoughBase;
-  r += (broad - 0.5) * 0.22 + (fine - 0.5) * 0.10;
+  // Gloss variation is far more visible than albedo variation under a key
+  // light, so the broad band gets less swing than the fine one, not more.
+  r += (broad - 0.5) * 0.075 + (fine - 0.5) * 0.085;
 
   // Pore floors hold oil and read slightly rougher than the plateaus.
   vec3 cw = worley(vec3(uv, uSeed), uPoreScale);
-  r += (1.0 - smoothstep(0.0, 0.55, cw.x)) * 0.07;
+  r += (1.0 - smoothstep(0.0, 0.45, cw.x)) * 0.05;
 
-  // Sebaceous T-zone: the vertical strip up the front of the head island from
-  // the nose bridge to the hairline. uHeadBand carries that local-v span.
+  // Sebaceous T-zone. It is a T: a bar across the forehead and a strip down the
+  // bridge of the nose. The first version was a rectangle spanning local v
+  // 0.34..0.82 and 0.15 of a turn either side of the midline - a slab covering
+  // the whole mid-face from the mouth to the top of the skull. Under the key
+  // light that is a single flat gloss plate, and it is the main reason the face
+  // read as painted clay with the form washed out of it.
+  // uHeadBand is the local-v span of the T: x at the nose base, y at the
+  // hairline.
 ${HEAD_LOCAL}
-  float band = smoothstep(uHeadBand.x, uHeadBand.x + 0.10, hp.y)
-             * (1.0 - smoothstep(uHeadBand.y - 0.10, uHeadBand.y, hp.y));
-  float centre = 1.0 - smoothstep(0.0, 0.15, abs(hp.x - 0.5));
-  float tz = inHead * faceFront * band * (0.55 + 0.45 * centre);
-  tz *= 0.6 + 0.4 * (fbm(vec3(uv * 26.0, uSeed + 8.0), 3, 2.2, 0.5) * 0.5 + 0.5);
-  r -= tz * 0.20 * uOil;
+  float tzFy = (hp.y - mix(uHeadBand.x, uHeadBand.y, 0.90)) / 0.055;
+  float forehead = exp(-tzFy * tzFy) * (1.0 - smoothstep(0.045, 0.115, hAx));
+  float tzNy = (hp.y - mix(uHeadBand.x, uHeadBand.y, 0.32)) / 0.075;
+  float tzNx = hAx / 0.030;
+  float bridge = exp(-tzNy * tzNy) * exp(-tzNx * tzNx);
+  float tzCy = (hp.y - 0.245) / 0.045;
+  float chin = exp(-tzCy * tzCy) * (1.0 - smoothstep(0.030, 0.075, hAx));
+  float tz = inHead * faceFront * max(max(forehead, bridge), chin * 0.6);
+  tz *= 0.55 + 0.45 * (fbm(vec3(uv * 40.0, uSeed + 8.0), 3, 2.2, 0.5) * 0.5 + 0.5);
+  r -= tz * 0.11 * uOil;
 
   // Palms, soles and ear rims are drier and more matte than the rest.
 ${EXTREMITY_ROW}
-  r += extremityRow * 0.06;
+  r += extremityRow * 0.05;
 
   if (uWeather > 0.001) {
-    r += (ridged(vec3(uv * 8.0, uSeed + 2.0), 3, 2.2, 0.5) - 0.55) * uWeather * 0.22;
+    r += (ridged(vec3(uv * 34.0, uSeed + 2.0), 3, 2.2, 0.5) - 0.55) * uWeather * 0.11;
   }
   if (uScales > 0.001) {
     vec3 sc = worley(vec3(uv, uSeed * 0.71), uScaleFreq);
@@ -281,24 +352,41 @@ ${EXTREMITY_ROW}
 const THICK_FRAG = /* glsl */ `
   vec2 uv = vUv;
   float n = fbm(vec3(uv * 3.4, uSeed + 13.0), 4, 2.1, 0.55) * 0.5 + 0.5;
-  float t = 0.42 + n * 0.36;
+  float t = 0.44 + n * 0.14;
 
   // The extremity row is where light genuinely punches through: ear blades,
-  // fingertips, the webbing between digits. Open it right up.
+  // fingertips, the webbing between digits. Open it up — but not to 0.98. The
+  // hand island butts onto the arm island in the atlas but not in space, so a
+  // near-saturated step here shows up as a pale, washed-out glove ending at a
+  // hard line across the wrist.
 ${EXTREMITY_ROW}
-  t = mix(t, 0.98, extremityRow * 0.85);
+  t = mix(t, 0.86, extremityRow * 0.80);
 
-  // Nose wings and lips on the head island get most of the way there too.
+  // Nose wings, ear roots and lips on the head island get most of the way there
+  // too - but only those. The first version opened a band from local v 0.26 to
+  // 0.62 across the full (over-wide) faceFront window, which is chin to eyes,
+  // ear to ear. The pre-integrated ramp spreads a lit surface out rather than
+  // brightening it, so a wide high-thickness patch reads as a *dark* warm band
+  // across the mid-face - the second half of the flattening.
 ${HEAD_LOCAL}
-  float nose = smoothstep(0.26, 0.38, hp.y) * (1.0 - smoothstep(0.46, 0.62, hp.y));
-  t = mix(t, 0.88, inHead * faceFront * nose * 0.7);
+  float thNy = (hp.y - 0.398) / 0.055;
+  float thNx = hAx / 0.055;
+  float noseT = exp(-thNy * thNy) * exp(-thNx * thNx);
+  float thLy = (hp.y - 0.322) / 0.036;
+  float thLx = hAx / 0.060;
+  float lipT = exp(-thLy * thLy) * exp(-thLx * thLx);
+  t = mix(t, 0.92, inHead * faceFront * max(noseT, lipT * 0.85));
+  // Ear roots sit on the head island at roughly a quarter turn off the midline.
+  float thEy = (hp.y - 0.470) / 0.090;
+  float thEx = (hAx - 0.235) / 0.045;
+  t = mix(t, 0.85, inHead * exp(-thEy * thEy) * exp(-thEx * thEx));
 
   // The crown of the skull is the thickest thing on the body.
   t *= 1.0 - inHead * smoothstep(0.80, 0.98, hp.y) * 0.35;
 
   // Veining: thin, high-contrast filaments where light punches through.
-  float vein = ridged(vec3(uv * 7.0, uSeed + 21.0), 4, 2.3, 0.55);
-  t += smoothstep(0.72, 0.95, vein) * 0.16;
+  float vein = ridged(vec3(uv * 16.0, uSeed + 21.0), 4, 2.3, 0.55);
+  t += smoothstep(0.80, 0.97, vein) * 0.07;
 
   t *= mix(1.0, 0.50, uScales);
   t *= mix(1.0, 0.72, uWeather);
@@ -353,27 +441,43 @@ float skSss;
 const FRAG_SURFACE = /* glsl */ `
 	vec3 skN = normalize( vSkNormal );
 	float skCurvRaw = length( fwidth( skN ) ) / max( length( fwidth( vSkPos ) ), 1e-4 );
-	skCurvature = clamp( skCurvRaw * uSkCurvGain, 0.0, 1.0 );
+
+	// Soft saturation instead of a clamp. The head grid now spends four to five
+	// times as many rows on the facial band, so a lip groove or a nostril
+	// undercut is a two-millimetre radius sitting next to a hundred-millimetre
+	// cheek: through a hard clamp the face came back as a binary mask, 1 on
+	// every crease and 0.1 everywhere else, and everything keyed off curvature
+	// (gloss, warmth, scattering) inherited that mask as mottled patches at the
+	// scale of the tessellation. x/(1+x) keeps the same ordering, never
+	// saturates, and leaves broad form legible.
+	float skC = max( skCurvRaw, 0.0 ) * uSkCurvGain;
+	skCurvature = skC / ( 1.0 + skC );
 
 	// Wide band on purpose: uSkBodyHeight is the race baseline, while the live
 	// figure carries a +/-18% height slider and a per-race head scale on top.
 	float skYn = clamp( vSkPos.y / max( uSkBodyHeight, 0.1 ), 0.0, 1.0 );
 	float skHead = smoothstep( 0.68, 0.86, skYn );
+	// The baked roughness map already places the T-zone from the UVs, where it
+	// can actually be shaped like a T. This term only keeps the front of the
+	// head marginally damper than the back, so it must stay small - at 0.17,
+	// modulated by a saturating curvature, it was a second full-strength gloss
+	// pass over the whole front hemisphere of the skull.
 	float skFace = skHead * smoothstep( 0.02, 0.62, skN.z );
-	float skTZone = skFace * ( 0.50 + 0.50 * skCurvature );
 
 	// A whisper of moving sheen so the surface is never dead still.
 	float skSweat = 1.0 + 0.025 * sin( uSkTime * 0.6 + vSkPos.y * 3.0 );
-	roughnessFactor = clamp( roughnessFactor - skTZone * 0.17 * uSkOil * skSweat
+	roughnessFactor = clamp( roughnessFactor - skFace * 0.045 * uSkOil * skSweat
 		+ ( 1.0 - skHead ) * 0.02, 0.055, 1.0 );
 
 	// Cartilage and thin tissue run warmer even before any light hits them.
-	float skTip = smoothstep( 0.22, 0.85, skCurvature );
+	// Retuned for the soft curvature response: only a genuinely tight radius
+	// (an ear rim, a nose tip, a fingertip) gets there, not every crease.
+	float skTip = smoothstep( 0.42, 0.92, skCurvature );
 	diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * uSkExtremityTint,
 		skTip * uSkExtremity );
 
 	float skThick = texture2D( uSkThickness, vSkUv ).r;
-	skSss = clamp( uSkSssStrength * skThick * ( 0.30 + 0.85 * skCurvature ), 0.0, 1.0 );
+	skSss = clamp( uSkSssStrength * skThick * ( 0.45 + 0.65 * skCurvature ), 0.0, 1.0 );
 
 #include <lights_physical_fragment>
 `;
@@ -545,8 +649,10 @@ export function createSkinMaterial(ctx, params = {}) {
     return tex;
   }
 
-  // Local-v span of the head island's T-zone: nose bridge up to the hairline.
-  const T_ZONE_V = new THREE.Vector2(0.34, 0.82);
+  // Local-v span of the head island's T-zone. Local v is latitude on the head
+  // island, so 0.376 is the base of the nose and 0.655 is the hairline; the old
+  // 0.34..0.82 ran from the mouth to the top of the skull.
+  const T_ZONE_V = new THREE.Vector2(0.376, 0.655);
   // A warm, slightly saturated multiplier standing in for capillary blood.
   const BLUSH_TINT = new THREE.Color(1.22, 0.80, 0.72);
 
@@ -581,11 +687,20 @@ export function createSkinMaterial(ctx, params = {}) {
       uniforms: {
         uTexel: 1.0 / NORMAL_SIZE,
         uSeed: seed,
-        // ~200 cells across the sheet: a few texels per pore, which reads as
-        // skin at the face framing and mips cleanly to smooth at full body.
-        uPoreScale: 200.0 * tuning.pore,
+        // ~620 cells across a 2048 sheet, i.e. three texels on a pore. The head
+        // island is a quarter of the sheet's area and a face is a fraction of
+        // that again, so at the previous 200 cells on a 1024 sheet a single
+        // "pore" was five texels wide and, at the face framing, six or seven
+        // screen pixels — a dimple, not a pore. Four times the texels and three
+        // times the cell count puts a pore back at one or two pixels, which is
+        // what makes it read as skin rather than as hammered clay.
+        uPoreScale: 620.0 * tuning.pore,
         uPoreDepth: tuning.poreDepth,
-        uStrength: 1.2 * tuning.poreDepth,
+        // Constant. `poreDepth` already scales the pore term inside the bake
+        // and `normalScale` scales the whole map on the way out; multiplying
+        // here as well cubed it, and a 1.45 Orc came out four times as pitted
+        // as a 1.0 Human rather than half again.
+        uStrength: 1.75,
         uWeather: weather,
         uScales: scales,
         uScaleFreq: 46.0 + weather * 8.0
@@ -603,7 +718,7 @@ export function createSkinMaterial(ctx, params = {}) {
         uSeed: seed,
         uRoughBase: tuning.rough,
         uOil: tuning.oil,
-        uPoreScale: 200.0 * tuning.pore,
+        uPoreScale: 330.0 * tuning.pore,
         uHeadBand: T_ZONE_V,
         uWeather: weather,
         uScales: scales,
@@ -622,22 +737,34 @@ export function createSkinMaterial(ctx, params = {}) {
     }));
   }
 
-  // Albedo is the only map that multiplies with tone, so it is the only one
-  // that can grow without bound. Evict the least recently used beyond the cap;
-  // everything recently visited stays resident and re-selects instantly.
-  const albedoLru = [];
-  function touchAlbedo(key) {
-    const i = albedoLru.indexOf(key);
-    if (i !== -1) albedoLru.splice(i, 1);
-    albedoLru.push(key);
-    while (albedoLru.length > ALBEDO_CACHE_MAX) {
-      const dead = albedoLru.shift();
-      if (dead !== key) {
-        memo.delete(dead);
-        bakery.invalidate(dead);
+  // Bounded LRUs. Albedo multiplies out over tone as well as race, so it gets
+  // the larger cap; the detail maps only vary with race and feature flags, but
+  // the normal map is 2048 square (about 21 MB with mips) so a dozen resident
+  // races is a quarter of a gigabyte. Cap it and let the rest re-bake — a
+  // re-bake is a few milliseconds and only happens on a race change.
+  function makeLru(limit, keysFor) {
+    const order = [];
+    return (key) => {
+      const i = order.indexOf(key);
+      if (i !== -1) order.splice(i, 1);
+      order.push(key);
+      while (order.length > limit) {
+        const dead = order.shift();
+        if (dead === key) continue;
+        for (const bakeKey of keysFor(dead)) {
+          memo.delete(bakeKey);
+          bakery.invalidate(bakeKey);
+        }
       }
-    }
+    };
   }
+  const touchAlbedo = makeLru(ALBEDO_CACHE_MAX, (k) => [k]);
+  // One entry per race+feature combination, evicting all three of its detail
+  // maps together — they are always used as a set, so dropping one of the three
+  // would free a texture the material is still pointing at.
+  const touchDetail = makeLru(DETAIL_CACHE_MAX, (k) => [
+    `skin-normal-${k}`, `skin-rough-${k}`, `skin-thickness-${k}`
+  ]);
 
   // -------------------------------------------------------------------------
 
@@ -671,6 +798,9 @@ export function createSkinMaterial(ctx, params = {}) {
     material.map = bakeAlbedo(albedoKey, tone, tuning, scales, weather, seed);
     touchAlbedo(albedoKey);
 
+    // Touch before baking: the LRU must never evict the set we are about to
+    // hand to the material.
+    touchDetail(`${race}-${featureKey(scales, weather)}`);
     material.normalMap = bakeNormal(race, tuning, scales, weather, seed);
     material.roughnessMap = bakeRough(race, tuning, scales, weather, seed);
     U.uSkThickness.value = bakeThickness(race, scales, weather, seed);
@@ -678,7 +808,7 @@ export function createSkinMaterial(ctx, params = {}) {
     // Scalar/colour uniforms — pure writes, no allocation, no recompile.
     U.uSkSssStrength.value = 0.92 * tuning.sss * (1.0 - scales * 0.45);
     U.uSkSssTint.value.setRGB(tuning.sssTint[0], tuning.sssTint[1], tuning.sssTint[2]);
-    U.uSkExtremity.value = 0.62 * tuning.blush * (1.0 - scales * 0.6);
+    U.uSkExtremity.value = 0.30 * tuning.blush * (1.0 - scales * 0.6);
     U.uSkExtremityTint.value.setRGB(
       1.0 + 0.18 * tuning.blush,
       1.0 - 0.11 * tuning.blush,
@@ -693,7 +823,11 @@ export function createSkinMaterial(ctx, params = {}) {
     U.uSkSpecTight.value = 0.30 + 0.14 * tuning.oil;
     U.uSkSpecRoughTight.value = 0.42 - 0.06 * tuning.oil;
 
-    material.normalScale.set(0.75 * tuning.poreDepth, 0.75 * tuning.poreDepth);
+    // Compressed, not proportional: the coarse-skinned races run poreDepth up
+    // to 1.58, and at face framing the difference between "leathery" and
+    // "sandpaper" is much smaller than that number suggests.
+    const ns = 0.72 * (0.55 + 0.45 * tuning.poreDepth);
+    material.normalScale.set(ns, ns);
   }
 
   // Seed with a full set of maps up front so the define set (USE_MAP,
