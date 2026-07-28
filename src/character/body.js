@@ -11,8 +11,10 @@
 //      hunch accumulates up the back instead of being a single rigid tilt;
 //   2. loft rings of vertices along that spine and along every limb curve,
 //      using per-region radius profiles scaled by the build multipliers;
-//   3. build the head as a deformed sphere (brow / jaw / snout / cheek bands,
-//      six face variants) and bolt ears, tusks and horns onto it in head-local
+//   3. build the head as a sculpted skull — see `headSurface`, which carves an
+//      orbit, brow, nose, mouth, cheekbone and chin as localised forms on a
+//      flattened facial plane — on a grid whose rows and columns are packed
+//      onto the face, then bolt ears, tusks and horns onto it in head-local
 //      space before transforming the whole assembly onto the neck;
 //   4. merge every part into ONE indexed BufferGeometry, weld it, run a light
 //      weighted Laplacian pass so shoulders/hips/knees read as joints rather
@@ -20,7 +22,8 @@
 //   5. normalise so the feet sit on y = 0 and the total height is exactly
 //      `build.height`, and push the same transform through the joint frames.
 //
-// Budget: ~12-18k triangles depending on race (limit is 40k).
+// Budget: ~25-27k triangles depending on race (limit is 40k); about 18k of that
+// is the head, which is where every close-up is decided.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -431,7 +434,7 @@ function headParams(F, faceIndex, headR, gaunt) {
     // ellipsoid was within 25% of a sphere on every axis, which is most of why
     // the head read as an egg before a single feature was carved into it.
     rx: headR * 0.700,
-    ry: headR * 1.050 * fv.skullH,
+    ry: headR * 1.020 * fv.skullH,
     rz: headR * 0.880,
 
     jaw: F.jaw * fv.jaw,
@@ -540,14 +543,18 @@ function headSurface(P, theta, phi) {
   // uniform-width plane turns the mouth into a muzzle.
   const planeR = lerp(0.30, 0.56, smoothstep(-0.78, 0.18, uy));
   const planeW = faceM * gauss(ax, planeR) * plateau(uy, -0.86, 0.45, 0.25);
-  z *= lerp(1, Math.min(Math.pow(Math.max(sp, 0.30), -0.48), 1.45), planeW);
+  z *= lerp(1, Math.min(Math.pow(Math.max(sp, 0.30), -0.42), 1.38), planeW);
 
   // Mandible. It has to stay at least as wide as the throat under it or the
   // head reads as a light bulb sitting on a neck.
   x *= 1 + 0.10 * P.jaw * gauss(uy - (P.chinY + 0.34), 0.20);
-  const taper = smoothstep(-0.38, -0.95, uy);
-  x *= lerp(1, 0.46, taper);
-  z *= lerp(1, 0.74, taper * back);
+  // Two-stage taper: the mandible body keeps most of its width, and only the
+  // chin narrows. A single ramp from the nose down gives a cone, which reads as
+  // a pointed alien jaw however wide the cheekbones are.
+  const jawT = smoothstep(-0.34, -0.62, uy);
+  const chinT = smoothstep(-0.62, -0.95, uy);
+  x *= lerp(1, 0.86, jawT) * lerp(1, 0.55, chinT);
+  z *= lerp(1, 0.74, chinT * back);
 
   /* ---- eye sockets --------------------------------------------------------*/
   // A bony orbit with two lid crescents around the aperture. The lids sit
@@ -599,11 +606,11 @@ function headSurface(P, theta, phi) {
     // there is no shadow, and a nose with no shadow is invisible past arm's
     // length no matter how far it sticks out.
     const nos = blob2(ax - 0.115 * P.noseW, dY(uy, P.noseBaseY) + 0.030, 0.055, 0.035) * faceM;
-    z -= R * 0.115 * f * nos;
+    z -= R * 0.130 * f * nos;
     y -= R * 0.028 * f * nos;
 
     // Philtrum.
-    z -= R * 0.030 * P.flat * blob2(ax, dY(uy, P.noseBaseY) + 0.085, 0.042, 0.060) * faceM;
+    z -= R * 0.042 * P.flat * blob2(ax, dY(uy, P.noseBaseY) + 0.080, 0.038, 0.055) * faceM;
 
     // Nasolabial fold, from the wing of the nose down to the corner of the mouth.
     const nlT = sat((P.noseBaseY - uy) / Math.max(1e-3, P.noseBaseY - (P.mouthY - 0.03)));
@@ -646,7 +653,7 @@ function headSurface(P, theta, phi) {
   }
 
   /* ---- chin ---------------------------------------------------------------*/
-  const chinB = blob2(ax, dY(uy, P.chinY), 0.185, 0.120) * faceM;
+  const chinB = blob2(ax, dY(uy, P.chinY), 0.215, 0.125) * faceM;
   z += R * 0.185 * P.chin * chinB;
   y -= R * 0.022 * P.chin * chinB;
   // Submental shelf: the underside of the chin has to fall away or the jaw and
@@ -1167,7 +1174,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
 
   // --- torso / neck skeleton -------------------------------------------------
   const neckLen = Math.max(headR * 0.16, headR * 0.95 * B.neck);
-  const headCentreYNom = H - headR * 1.05;
+  const headCentreYNom = H - headR * 1.02;
   const torsoLen = Math.max(H * 0.16, headCentreYNom - headR * 0.68 - neckLen - hipY);
 
   // Tangent angle away from vertical, integrated up the spine. The hunch is
