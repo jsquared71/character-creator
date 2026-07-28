@@ -14,7 +14,9 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const PORT = 8817;
+// Port 0 lets the OS assign a free one, so several agents can run the harness
+// concurrently without fighting over a fixed port.
+const PORT = 0;
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -51,6 +53,7 @@ const views = (args.views || 'hero,profile,face,detail,full').split(',');
 mkdirSync(outDir, { recursive: true });
 
 const server = await serve();
+const port = server.address().port;
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
          '--ignore-gpu-blocklist', '--enable-webgl', '--disable-lcd-text']
@@ -72,7 +75,7 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
-await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'load' });
+await page.goto(`http://127.0.0.1:${port}/index.html`, { waitUntil: 'load' });
 
 const ready = await page.waitForFunction(
   () => window.__creator && document.body.classList.contains('ready'),
