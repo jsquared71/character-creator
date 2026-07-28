@@ -1,0 +1,503 @@
+// Eye material.
+//
+// The eyes carry a disproportionate share of the "is this a real character"
+// judgement in a face close-up, so this is a full eye shader rather than a
+// tinted sphere:
+//
+//   - the mesh is a unit sphere whose +Z pole is the pupil (character.js
+//     orients each instance with setFromUnitVectors(+Z, joint.forward)), so all
+//     of the shading maths happens in an eye-local frame reconstructed in the
+//     vertex shader from modelViewMatrix * instanceMatrix. That keeps the
+//     effect correct per instance and under any head rotation.
+//   - a *parallax-corrected* iris: the view ray is refracted through a cornea
+//     (a tighter sphere blended in over the limbus) at IOR 1.336 and marched to
+//     a flat iris plane sunk one anterior-chamber-depth behind the front pole.
+//     The iris texture is looked up at that intersection, so the iris swims
+//     behind the cornea as the head turns, and reads slightly magnified.
+//   - the corneal gloss rides three.js' clearcoat lobe (real lights, real IBL,
+//     white F0 so it never picks up the iris colour) with the clearcoat normal
+//     replaced by the corneal normal, plus an explicit tight + broad analytic
+//     lobe pair on top so there is always a hard catchlight.
+//   - a soft limbal ring, a slightly non-circular pupil, and a sclera that
+//     warms and veins toward the corners instead of being paper white.
+//   - WoW races glow: the emissive term is derived from the colour's own
+//     saturation / lightness, so #8fd8ff (Night Elf) or #ffd24a (Undead) light
+//     themselves up and feed the bloom threshold while #7d5a34 stays inert.
+//
+// Both maps come from the Bakery, keyed by colour.
+
+import * as THREE from 'three';
+
+const IRIS_TEX = 512;
+const SCLERA_TEX = 512;
+
+// Half-angle from the +Z pole out to the limbus, radians. ~35 degrees: a touch
+// larger than a real eye, which is what reads as "heroic" at portrait distance.
+const IRIS_HALF_ANGLE = 0.62;
+const IRIS_SIN = Math.sin(IRIS_HALF_ANGLE);
+
+// Anterior chamber depth in eye radii (real eye is ~3mm in a 12mm radius).
+const CHAMBER_DEPTH = 0.22;
+
+// Corneal bulge radius in eye radii (real cornea is ~7.8mm vs a 12mm globe).
+const CORNEA_RADIUS = 0.70;
+
+const DEFAULT_COLOR = '#4a6d8c';
+
+/* ------------------------------------------------------------------ *
+ * Baked maps
+ * ------------------------------------------------------------------ */
+
+// Radial fibre striations + crypts + collarette, tinted by the eye colour.
+// Laid out as a disc: uv 0.5,0.5 is the pupil centre, radius 0.5 is the limbus.
+//
+// Authoring note: the bake target is SRGB8_ALPHA8, which in WebGL2 encodes on
+// write and decodes on sample, so the value the shader writes is what the
+// material samples in *linear* space. All the ramp constants below are hand
+// tuned perceptually (uColor arrives as raw sRGB hex components), so the last
+// line encodes back to linear.
+const IRIS_FRAG = /* glsl */ `
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  vec2 d = r > 1e-5 ? p / r : vec2(1.0, 0.0);
+  float a = atan(p.y, p.x);
+
+  // Angular coordinate lives on a circle so the 0/2PI seam is continuous;
+  // radius goes into z and is stretched by fibre() into long radial streaks.
+  float f1 = fibre(vec3(d * 9.0,  r * 5.0),  vec3(0.0, 0.0, 1.0), 7.0, 5);
+  float f2 = fibre(vec3(d * 23.0, r * 9.0),  vec3(0.0, 0.0, 1.0), 5.0, 4);
+  float f3 = fibre(vec3(d * 47.0, r * 15.0), vec3(0.0, 0.0, 1.0), 4.0, 3);
+
+  // Fuchs' crypts: cellular pits, denser in the ciliary zone.
+  vec3 w1 = worley(vec3(d * 5.0,  r * 3.2), 1.0);
+  vec3 w2 = worley(vec3(d * 12.0, r * 6.5), 1.0);
+  float crypt     = smoothstep(0.05, 0.55, w1.x);
+  float cryptEdge = smoothstep(0.12, 0.0,  w1.y - w1.x);
+  float cryptFine = smoothstep(0.08, 0.45, w2.x);
+
+  // Collarette: the wavy ridge dividing pupillary from ciliary zone.
+  float collR = 0.40 + 0.11 * fbm(vec3(d * 4.0, 0.0), 3, 2.2, 0.5);
+  float pupZone = smoothstep(collR + 0.06, collR - 0.05, r);
+  float collRidge = exp(-pow((r - collR) / 0.055, 2.0));
+
+  // Stromal depth. This is the value that must survive the tint.
+  float stro = clamp(0.5 + 1.15 * f1 + 0.75 * f2 + 0.45 * f3, 0.0, 1.0);
+  float depth = mix(0.58, 1.22, stro);
+  depth *= mix(0.70, 1.06, crypt);
+  depth *= mix(0.86, 1.04, cryptFine);
+  depth *= 1.0 - 0.38 * cryptEdge;
+  depth *= 1.0 + 0.45 * collRidge;
+  depth *= mix(1.0, 0.58, smoothstep(0.70, 1.02, r));   // dark toward limbus
+  depth *= mix(1.0, 0.78, smoothstep(0.32, 0.10, r));   // pupillary ruff
+
+  // Integer frequency keeps the spoke pattern seamless across the atan cut.
+  float spokes = sin(a * 96.0 + f2 * 26.0);
+  depth *= 1.0 + 0.11 * spokes * smoothstep(0.16, 0.55, r);
+
+  vec3 base = uColor;
+  vec3 dark = base * base * 0.60;
+  vec3 lite = mix(base, vec3(1.0), 0.62);
+  float k = clamp(depth, 0.0, 2.0);
+  vec3 col = k < 1.0 ? mix(dark, base, k) : mix(base, lite, clamp(k - 1.0, 0.0, 1.0));
+
+  // Golden pupillary zone — almost every iris has one, whatever its hue.
+  col = mix(col, col * vec3(1.32, 1.06, 0.58), pupZone * 0.32);
+  // Outer stroma desaturates into the limbus.
+  col = mix(col, mix(col, vec3(luminance(col)), 0.40), smoothstep(0.76, 1.0, r));
+
+  // Alpha carries the raw stromal structure. RGB gets washed out by the glow
+  // term on vivid colours, so the emissive is modulated by this instead — that
+  // is what keeps a Night Elf eye a *fibrous* glow rather than a flat disc.
+  gl_FragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(2.2)),
+                      clamp((depth - 0.35) * 0.72, 0.0, 1.0));
+`;
+
+// Azimuthal-equidistant layout: uv centre is the +Z pole, uv radius 0.5 is the
+// back pole, so radius = theta / PI. Matches the mapping used in the material.
+const SCLERA_FRAG = /* glsl */ `
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  vec2 d = r > 1e-5 ? p / r : vec2(0.0, 1.0);
+
+  vec3 col = mix(vec3(0.935, 0.928, 0.912), vec3(0.888, 0.808, 0.762),
+                 smoothstep(0.12, 0.48, r));
+  col = mix(col, vec3(0.660, 0.470, 0.430), smoothstep(0.42, 0.64, r));
+
+  vec3 q = vec3(p * 4.5, 0.31);
+  float warp = fbm(q * 1.7, 4, 2.1, 0.55);
+  float v1 = ridged(q * 2.2 + warp * 0.60, 5, 2.15, 0.50);
+  float v2 = ridged(q * 5.6 + warp * 0.95, 4, 2.30, 0.50);
+  float veins = smoothstep(0.83, 0.995, v1) * 0.90 + smoothstep(0.90, 1.0, v2) * 0.50;
+  veins *= smoothstep(0.16, 0.46, r);              // nothing crosses the cornea
+  veins *= 0.22 + 0.78 * abs(d.x);                 // densest toward the corners
+  col = mix(col, vec3(0.605, 0.235, 0.205), clamp(veins, 0.0, 1.0) * 0.42);
+
+  col *= 1.0 + 0.055 * fbm(vec3(p * 9.0, 2.0), 4, 2.0, 0.5);
+  col *= 1.0 - 0.10 * smoothstep(0.30, 0.55, r);
+
+  gl_FragColor = vec4(pow(clamp(col, 0.0, 1.0), vec3(2.2)), 1.0);
+`;
+
+/* ------------------------------------------------------------------ *
+ * Injected shader
+ * ------------------------------------------------------------------ */
+
+const VERT_PARS = /* glsl */ `
+varying vec3 vEyeP;
+varying vec3 vEyeAX;
+varying vec3 vEyeAY;
+varying vec3 vEyeAZ;
+`;
+
+// modelViewMatrix does not include instanceMatrix, so rebuild the eye's local
+// axes in view space by hand. Normalising each column absorbs the uniform
+// per-instance scale (the eye radius).
+const VERT_BODY = /* glsl */ `
+  vEyeP = normalize(position);
+  mat3 eyeBasis = mat3(modelViewMatrix);
+  #ifdef USE_INSTANCING
+    eyeBasis = eyeBasis * mat3(instanceMatrix);
+  #endif
+  vEyeAX = normalize(eyeBasis[0]);
+  vEyeAY = normalize(eyeBasis[1]);
+  vEyeAZ = normalize(eyeBasis[2]);
+`;
+
+const FRAG_PARS = /* glsl */ `
+varying vec3 vEyeP;
+varying vec3 vEyeAX;
+varying vec3 vEyeAY;
+varying vec3 vEyeAZ;
+
+uniform sampler2D uEyeIris;
+uniform sampler2D uEyeSclera;
+uniform float uEyeIrisSin;
+uniform float uEyeIrisAngle;
+uniform float uEyeChamber;
+uniform float uEyeCorneaR;
+uniform float uEyePupil;
+uniform float uEyeIor;
+uniform float uEyeGlow;
+uniform vec3  uEyeGlowColor;
+uniform float uEyeSpecTight;
+uniform float uEyeSpecBroad;
+uniform float uEyeSpecPower;
+uniform float uEyePulse;
+
+// A tight, near-white catchlight plus a subtle broader wet lobe. Deliberately
+// white * lightColour so the highlight never picks up the iris tint.
+vec3 eyeCorneaLobe(vec3 L, vec3 lightColor, vec3 N, vec3 V) {
+  vec3 H = normalize(L + V);
+  float ndh = max(dot(N, H), 1e-4);
+  float ndl = max(dot(N, L), 0.0);
+  float tight = pow(ndh, uEyeSpecPower) * uEyeSpecTight;
+  float broad = pow(ndh, 42.0) * uEyeSpecBroad;
+  return lightColor * ndl * (tight + broad);
+}
+
+struct EyeData {
+  vec3  albedo;
+  vec3  emissive;
+  vec3  corneaN;    // view space
+  float rough;
+  float specMask;
+};
+
+EyeData sampleEyeSurface() {
+  EyeData e;
+
+  vec3 P  = normalize(vEyeP);
+  vec3 ax = normalize(vEyeAX);
+  vec3 ay = normalize(vEyeAY);
+  vec3 az = normalize(vEyeAZ);
+
+  // View direction (fragment -> camera), expressed in the eye's own frame.
+  vec3 Vv = normalize(vViewPosition);
+  vec3 Vl = normalize(vec3(dot(Vv, ax), dot(Vv, ay), dot(Vv, az)));
+
+  float sr    = length(P.xy);
+  vec2  rdir  = sr > 1e-5 ? P.xy / sr : vec2(1.0, 0.0);
+  float theta = acos(clamp(P.z, -1.0, 1.0));
+  float gr    = theta / uEyeIrisAngle;   // geometric radius, 1.0 at the limbus
+
+  // --- cornea ------------------------------------------------------------
+  // Blend the globe normal toward the normal of a tighter sphere over the
+  // iris. limb is 1 across the cornea and 0 out on the sclera.
+  float limb = smoothstep(1.26, 0.84, gr);
+  vec3 corneaCentre = vec3(0.0, 0.0, 1.0 - uEyeCorneaR);
+  vec3 Ncornea = normalize(P - corneaCentre);
+  vec3 Nl = normalize(mix(P, Ncornea, limb));
+
+  // --- parallax-corrected iris -------------------------------------------
+  // Refract into the aqueous humour, then march to the iris plane.
+  vec3 R = refract(-Vl, Nl, 1.0 / uEyeIor);
+  if (dot(R, R) < 1e-6) R = -Vl;               // total internal reflection guard
+  R.z = min(R.z, -1e-3);                       // always travel into the eye
+  float zIris = 1.0 - uEyeChamber;
+  float t = clamp((zIris - P.z) / R.z, 0.0, 1.5);   // bounded: grazing safety
+  vec2 irisP = P.xy + t * R.xy;
+
+  float ir = length(irisP) / uEyeIrisSin;      // parallaxed radius, 1 at limbus
+  vec2 irisUv = clamp(irisP / uEyeIrisSin * 0.5 + 0.5, 0.0, 1.0);
+  vec4 irisTex = texture2D(uEyeIris, irisUv);
+  vec3 irisCol = irisTex.rgb;
+  float irisStruct = irisTex.a;   // stromal depth, survives the glow wash
+
+  // --- pupil: soft edged, deliberately not a perfect circle ---------------
+  float pa = atan(irisP.y, irisP.x);
+  float pr = uEyePupil * (1.0 + 0.050 * sin(pa * 3.0 + 1.3)
+                              + 0.030 * sin(pa * 7.0 - 0.4)
+                              + 0.018 * sin(pa * 13.0 + 2.1));
+  float pupil = smoothstep(pr - 0.075, pr + 0.055, ir);
+  // A glowing eye loses most of its pupil contrast — Night Elves barely have
+  // a visible pupil at all.
+  pupil = mix(pupil, mix(pupil, 1.0, 0.45), uEyeGlow);
+  irisCol *= mix(0.030, 1.0, pupil);
+
+  // --- limbal ring --------------------------------------------------------
+  // Sits on the cornea surface, so it keys off the geometric radius and does
+  // not swim with the parallax.
+  float limbal = 1.0 - smoothstep(0.0, 0.30, abs(gr - 0.965));
+  limbal = limbal * limbal;
+  irisCol *= mix(1.0, 0.085, limbal * 0.92);
+
+  // --- sclera -------------------------------------------------------------
+  vec2 scleraUv = 0.5 + 0.5 * rdir * (theta / 3.14159265);
+  vec3 scleraCol = texture2D(uEyeSclera, clamp(scleraUv, 0.0, 1.0)).rgb;
+
+  float irisMask = 1.0 - smoothstep(0.93, 1.05, gr);
+  vec3 albedo = mix(scleraCol, irisCol, irisMask);
+  albedo *= mix(1.0, 0.20, limbal * 0.55 * (1.0 - irisMask));
+
+  // Lid contact occlusion: eyes sit in sockets, the top of the globe is never
+  // as bright as the bottom. Local +Y is roughly up for a forward-facing eye.
+  albedo *= mix(1.0, 0.52, smoothstep(0.05, 0.85, P.y));
+  albedo *= mix(1.0, 0.80, smoothstep(0.15, 0.80, -P.y));
+
+  // --- glow ---------------------------------------------------------------
+  float bleed = exp(-pow(max(gr - 1.0, 0.0) * 3.4, 2.0)) * (1.0 - irisMask);
+  float core  = pow(clamp(1.0 - ir * 0.86, 0.0, 1.0), 4.0);
+  float body  = smoothstep(1.16, 0.0, ir) * irisMask;
+  float pulse = 0.88 + 0.12 * uEyePulse;
+  // Fibres and crypts modulate the glow, and the limbal ring still cuts it, so
+  // even a fully self-lit eye keeps its iris drawing instead of blooming flat.
+  float structMod = mix(0.40, 1.45, irisStruct) * mix(1.0, 0.16, limbal * 0.9);
+  e.emissive = uEyeGlowColor * uEyeGlow * pulse * structMod *
+               (0.62 * body + 2.10 * core * mix(0.55, 1.0, pupil) + 0.34 * bleed);
+  // Vivid eyes wash their own iris toward the glow hue.
+  albedo = mix(albedo, mix(albedo, uEyeGlowColor, 0.20), uEyeGlow * irisMask);
+
+  // --- surface ------------------------------------------------------------
+  e.albedo = albedo;
+  e.rough  = mix(0.44, 0.16, limb) + 0.10 * smoothstep(0.45, 1.0, gr) * (1.0 - limb);
+  e.specMask = mix(0.30, 1.0, limb);
+  e.corneaN = normalize(ax * Nl.x + ay * Nl.y + az * Nl.z);
+  return e;
+}
+`;
+
+// Explicit corneal lobes on top of everything, straight from the scene's
+// directional lights. Near-white and iris-colour independent by construction.
+const FRAG_SPEC = /* glsl */ `
+  #if NUM_DIR_LIGHTS > 0 || NUM_POINT_LIGHTS > 0
+  {
+    vec3 corneaSpec = vec3(0.0);
+    #if NUM_DIR_LIGHTS > 0
+    for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+      corneaSpec += eyeCorneaLobe(directionalLights[i].direction,
+                                  directionalLights[i].color,
+                                  eyeData.corneaN, geometryViewDir);
+    }
+    #endif
+    #if NUM_POINT_LIGHTS > 0
+    for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+      vec3 lv = pointLights[i].position - geometryPosition;
+      float atten = getDistanceAttenuation(length(lv), pointLights[i].distance,
+                                           pointLights[i].decay);
+      corneaSpec += eyeCorneaLobe(normalize(lv), pointLights[i].color * atten,
+                                  eyeData.corneaN, geometryViewDir);
+    }
+    #endif
+    outgoingLight += corneaSpec * eyeData.specMask;
+  }
+  #endif
+`;
+
+/* ------------------------------------------------------------------ *
+ * Public API
+ * ------------------------------------------------------------------ */
+
+export function createEyeMaterial(ctx, params = {}) {
+  const { bakery, renderer, envMap } = ctx || {};
+
+  const uniforms = {
+    uEyeIris: { value: null },
+    uEyeSclera: { value: null },
+    uEyeIrisSin: { value: IRIS_SIN },
+    uEyeIrisAngle: { value: IRIS_HALF_ANGLE },
+    uEyeChamber: { value: CHAMBER_DEPTH },
+    uEyeCorneaR: { value: CORNEA_RADIUS },
+    uEyePupil: { value: 0.34 },
+    uEyeIor: { value: 1.336 },
+    uEyeGlow: { value: 0 },
+    uEyeGlowColor: { value: new THREE.Color(0x000000) },
+    uEyeSpecTight: { value: 1.65 },
+    uEyeSpecBroad: { value: 0.16 },
+    uEyeSpecPower: { value: 1400.0 },
+    uEyePulse: { value: 0 }
+  };
+
+  const material = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    roughness: 0.28,
+    metalness: 0.0,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.035,
+    ior: 1.336,
+    specularIntensity: 1.0,
+    envMapIntensity: 1.1,
+    side: THREE.FrontSide,
+    dithering: true
+  });
+  if (envMap) material.envMap = envMap;
+
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${VERT_PARS}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERT_BODY}`);
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${FRAG_PARS}`)
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        EyeData eyeData = sampleEyeSurface();
+        diffuseColor.rgb = eyeData.albedo;`
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        roughnessFactor = eyeData.rough;`
+      )
+      .replace(
+        '#include <clearcoat_normal_fragment_maps>',
+        `#include <clearcoat_normal_fragment_maps>
+        #ifdef USE_CLEARCOAT
+          clearcoatNormal = eyeData.corneaN;
+        #endif`
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        totalEmissiveRadiance += eyeData.emissive;`
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `${FRAG_SPEC}\n#include <opaque_fragment>`
+      );
+  };
+  material.customProgramCacheKey = () => 'wow-eye-v1';
+
+  const state = { color: null };
+  const glowColor = uniforms.uEyeGlowColor.value;
+  const tintVec = new THREE.Vector3(0.29, 0.43, 0.55);
+  const WHITE = new THREE.Color(1, 1, 1);
+  const rgb = [0, 0, 0];
+
+  function update(next = {}) {
+    const color = normaliseHex(next.color || state.color || DEFAULT_COLOR);
+    if (color === state.color && uniforms.uEyeIris.value) return;
+    state.color = color;
+
+    hexToRgb(color, rgb);
+    tintVec.set(rgb[0], rgb[1], rgb[2]);
+
+    if (bakery) {
+      // The bake's ShaderMaterial is disposed inside bake(), so handing it the
+      // shared vector is safe and keeps update() allocation-free.
+      const iris = bakery.bake(`eye-iris-v1-${color}`, IRIS_FRAG, {
+        width: IRIS_TEX,
+        height: IRIS_TEX,
+        uniforms: { uColor: tintVec },
+        wrap: THREE.ClampToEdgeWrapping,
+        colorSpace: THREE.SRGBColorSpace
+      });
+      const sclera = bakery.bake('eye-sclera-v1', SCLERA_FRAG, {
+        width: SCLERA_TEX,
+        height: SCLERA_TEX,
+        wrap: THREE.ClampToEdgeWrapping,
+        colorSpace: THREE.SRGBColorSpace
+      });
+      const aniso = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+      if (iris.anisotropy !== aniso) { iris.anisotropy = aniso; iris.needsUpdate = true; }
+      if (sclera.anisotropy !== aniso) { sclera.anisotropy = aniso; sclera.needsUpdate = true; }
+      uniforms.uEyeIris.value = iris;
+      uniforms.uEyeSclera.value = sclera;
+    }
+
+    // Glow drives off the colour's own vividness: saturated + bright reads as
+    // magical, muddy browns and desaturated blues stay inert. Near-white is
+    // special-cased so pure #ffffff Night Elf / Undead eyes still light up.
+    const max = Math.max(rgb[0], rgb[1], rgb[2]);
+    const min = Math.min(rgb[0], rgb[1], rgb[2]);
+    const l = (max + min) * 0.5;
+    const s = max - min < 1e-6 ? 0 : (max - min) / (1 - Math.abs(2 * l - 1));
+    let glow = smoothstep(0.55, 0.95, s) * smoothstep(0.34, 0.60, l);
+    glow = Math.max(glow, smoothstep(0.90, 1.0, l));
+    uniforms.uEyeGlow.value = glow;
+
+    // Emissive colour: push toward the hue at full chroma so the bloom core
+    // keeps its identity instead of clipping to white too early.
+    glowColor.setStyle(color, THREE.SRGBColorSpace);
+    const peak = Math.max(glowColor.r, glowColor.g, glowColor.b) || 1;
+    glowColor.multiplyScalar(1 / peak).lerp(WHITE, 0.16);
+
+    // Glowing eyes read better slightly wider; naturalistic ones stay tight.
+    uniforms.uEyePupil.value = 0.30 + 0.10 * glow;
+    uniforms.uEyeSpecTight.value = 1.65 - 0.55 * glow;
+  }
+
+  material.userData.update = update;
+
+  material.userData.tick = (t) => {
+    // Slow pupil breathing + a shallow glow pulse. Two uniform writes.
+    const b = Math.sin(t * 0.55) * 0.5 + Math.sin(t * 0.23 + 1.7) * 0.5;
+    uniforms.uEyePupil.value = 0.30 + 0.10 * uniforms.uEyeGlow.value + 0.012 * b;
+    uniforms.uEyePulse.value = Math.sin(t * 1.15) * 0.6 + Math.sin(t * 0.41) * 0.4;
+  };
+
+  material.userData.setEnvMap = (map) => {
+    material.envMap = map || null;
+    material.needsUpdate = true;
+  };
+
+  update(params);
+  return material;
+}
+
+/* ------------------------------------------------------------------ *
+ * Helpers
+ * ------------------------------------------------------------------ */
+
+function normaliseHex(hex) {
+  let h = String(hex || DEFAULT_COLOR).trim().replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) h = DEFAULT_COLOR.slice(1);
+  return `#${h.toLowerCase()}`;
+}
+
+/** sRGB-encoded 0..1 components — what a texture painter would type. */
+function hexToRgb(hex, out) {
+  const n = parseInt(hex.slice(1), 16);
+  out[0] = ((n >> 16) & 255) / 255;
+  out[1] = ((n >> 8) & 255) / 255;
+  out[2] = (n & 255) / 255;
+  return out;
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0), 1);
+  return t * t * (3 - 2 * t);
+}
