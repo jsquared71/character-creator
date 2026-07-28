@@ -110,12 +110,19 @@ window.__creator = {
   camera, controls, renderer, scene, character, perf, store,
   setView(name) {
     const h = character.height;
+    // Distances are derived from the vertical FOV so the whole figure fits:
+    // fitting height H at vfov f needs d = H / (2 tan(f/2)). At 32deg that is
+    // H / 0.5735, i.e. ~1.74 H, so a full-body view needs >= 2.0 H once
+    // headroom and horns are allowed for. The earlier 1.55 H cropped the head.
+    const fit = (frac, margin) => (h * frac * margin) / (2 * Math.tan(
+      THREE.MathUtils.degToRad(camera.fov) / 2
+    ));
     const views = {
-      hero:    { pos: [0.48, 0.20, 0.85], target: [0, h * 0.56, 0], dist: h * 1.55 },
-      profile: { pos: [1.0, 0.10, 0.02], target: [0, h * 0.56, 0], dist: h * 1.5 },
-      face:    { pos: [0.25, 0.06, 0.9], target: [0, h * 0.88, 0], dist: h * 0.42 },
-      detail:  { pos: [0.6, 0.05, 0.7], target: [0, h * 0.72, 0], dist: h * 0.30 },
-      full:    { pos: [0.35, 0.12, 0.92], target: [0, h * 0.52, 0], dist: h * 1.9 }
+      hero:    { pos: [0.48, 0.20, 0.85], target: [0, h * 0.52, 0], dist: fit(1.0, 1.22) },
+      profile: { pos: [1.0, 0.10, 0.02],  target: [0, h * 0.52, 0], dist: fit(1.0, 1.22) },
+      face:    { pos: [0.25, 0.06, 0.9],  target: [0, h * 0.90, 0], dist: fit(0.22, 1.15) },
+      detail:  { pos: [0.6, 0.05, 0.7],   target: [0, h * 0.74, 0], dist: fit(0.34, 1.15) },
+      full:    { pos: [0.35, 0.12, 0.92], target: [0, h * 0.50, 0], dist: fit(1.0, 1.45) }
     };
     const v = views[name] ?? views.hero;
     controls.target.set(...v.target);

@@ -139,8 +139,21 @@ if (ready) {
     const c = window.__creator;
     c.perf.reset();
     c.store.set({ autoRotate: true });
+    // renderer.info resets on every render() call, so with a composer the
+    // default read reports only the final fullscreen pass. Disable autoReset
+    // and clear once, then read the accumulated total for one frame.
+    c.renderer.info.autoReset = false;
+    c.renderer.info.reset();
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    const oneFrame = {
+      drawCalls: c.renderer.info.render.calls,
+      triangles: c.renderer.info.render.triangles
+    };
+    c.renderer.info.autoReset = true;
     await new Promise((r) => setTimeout(r, 4000));
     const info = c.renderer.info;
+    info.render.calls = oneFrame.drawCalls;
+    info.render.triangles = oneFrame.triangles;
     return {
       avgMs: +c.perf.avgMs.toFixed(2),
       p95Ms: +c.perf.p95Ms.toFixed(2),

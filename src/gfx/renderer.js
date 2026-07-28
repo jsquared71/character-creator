@@ -53,8 +53,10 @@ export function createStage(canvas) {
  * way a Tauren does, which is what makes the screen read as a hero shot.
  */
 export function frameCharacter(camera, controls, height, { instant = false } = {}) {
-  const targetY = height * 0.56;
-  const dist = height * 1.55;
+  const targetY = height * 0.52;
+  // d = H / (2 tan(vfov/2)) fits height H exactly; 1.22 leaves headroom for
+  // horns, ears and hair without letting a Gnome swim in empty frame.
+  const dist = (height * 1.22) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
   controls.target.set(0, targetY, 0);
   controls.minDistance = height * 0.55;
   controls.maxDistance = height * 3.2;
@@ -65,7 +67,7 @@ export function frameCharacter(camera, controls, height, { instant = false } = {
   } else {
     const dir = camera.position.clone().sub(controls.target).normalize();
     camera.position.copy(dir.multiplyScalar(
-      THREE.MathUtils.clamp(camera.position.distanceTo(controls.target), height * 0.9, height * 2.2)
+      THREE.MathUtils.clamp(camera.position.distanceTo(controls.target), dist * 0.6, dist * 1.6)
     )).add(controls.target);
   }
   controls.update();
