@@ -107,7 +107,11 @@ onResize();
 
 // Exposed for the critic harness: deterministic camera placement + readiness.
 window.__creator = {
-  camera, controls, renderer, scene, character, perf, store,
+  camera, controls, renderer, scene, character, perf, store, bakery,
+  // Screenshot harnesses must not capture mid-bake: switching class or race
+  // kicks off fresh texture bakes, and a frame taken before they land is a
+  // black viewport. Poll this until it stops moving.
+  get bakeCount() { return bakery.bakeCount; },
   setView(name) {
     const h = character.height;
     // Distances are derived from the vertical FOV so the whole figure fits:

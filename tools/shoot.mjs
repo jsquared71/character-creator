@@ -43,6 +43,31 @@ function serve() {
   return new Promise((resolve) => server.listen(PORT, () => resolve(server)));
 }
 
+
+/**
+ * Wait until the scene has stopped baking and has drawn a few stable frames.
+ *
+ * A fixed timeout here was a real bug: switching class triggers four fresh
+ * 512-square bakes, and a screenshot taken during them captured a pure black
+ * viewport -- backdrop included. It reproduced as "Rogue hero renders empty"
+ * and looked like a geometry defect, which cost an agent a diagnosis.
+ */
+async function settle(page, { quietFrames = 4, timeout = 60000 } = {}) {
+  await page.evaluate(async ({ quietFrames, timeout }) => {
+    const c = window.__creator;
+    const deadline = performance.now() + timeout;
+    let last = -1;
+    let quiet = 0;
+    while (performance.now() < deadline) {
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      const n = c.bakeCount;
+      quiet = n === last ? quiet + 1 : 0;
+      last = n;
+      if (quiet >= quietFrames) return;
+    }
+  }, { quietFrames, timeout });
+}
+
 const args = Object.fromEntries(
   process.argv.slice(2).join(' ').split('--').filter(Boolean)
     .map((s) => s.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(' ') || true])
@@ -92,17 +117,15 @@ if (ready) {
       if (klass) patch.class = klass;
       window.__creator.store.set(patch);
     }, [args.race || null, args.class || null]);
-    await page.waitForTimeout(900);
   }
 
-  // Let bakes settle and the auto-rotate reach a consistent angle.
   await page.evaluate(() => { window.__creator.store.set({ autoRotate: false }); });
   await page.evaluate(() => { window.__creator.character.group.rotation.y = 0; });
-  await page.waitForTimeout(500);
+  await settle(page);
 
   for (const view of views) {
     await page.evaluate((v) => window.__creator.setView(v), view);
-    await page.waitForTimeout(320);
+    await settle(page);
     const file = join(outDir, `${view}.png`);
     await page.screenshot({ path: file });
     report.shots.push(file);

@@ -1,9 +1,25 @@
 // Cinematic three-point rig + procedural IBL for the hero-select screen.
 //
-// The look: a warm key high and camera-left (the only shadow caster), a hard
-// cool rim low and behind that peels the silhouette off the backdrop, and a
-// dim warm-neutral bounce from below-front so the shadow side still reads.
-// A subtle class-coloured practical sits behind the hip on the rim side.
+// The look: a warm key high and camera-left (the only shadow caster), a cool
+// rim almost directly behind that peels the silhouette off the backdrop, and a
+// warm-neutral bounce from the shadow side and below so that side still reads.
+// A subtle class-coloured practical sits behind the hip on the key side.
+//
+// Rim geometry note (this is the whole trick, so it is worth writing down).
+// How far a light wraps around a form is set by the angle THETA between the
+// light direction and the view direction: the lit band, measured inward from
+// the silhouette edge, is (180deg - THETA) wide. The first version of this rig
+// put the rim at THETA ~ 112deg, so it wrapped ~68deg of the visible form --
+// on a head that is the entire shadow-side cheek, which is why a cool light
+// hot enough to make an edge read also flooded the shadow side to grey. It was
+// a second key wearing a rim's name.
+//
+// The rim now sits at THETA ~ 147deg in the face view (~131deg in the wider
+// hero view), so it wraps ~33deg / ~49deg and dies well before the cheek.
+// It is a SpotLight, not a DirectionalLight, for two further reasons: inverse
+// -square falloff keeps it off the backdrop behind the figure, and a wide cone
+// with a heavy penumbra puts the hot part of the rim on the head and shoulders
+// and lets it fade to about half by the boots.
 //
 // The image-based lighting is baked, not loaded: an equirectangular
 // "ruined stone hall at dusk" is rendered by the Bakery in an RGBM-ish
@@ -18,10 +34,28 @@ import * as THREE from 'three';
 // --- rig geometry (metres, Y-up, feet at y=0, character faces +Z) -----------
 // Camera lives around (+x, +z), so camera-left is roughly -x/+z.
 const KEY_POS = new THREE.Vector3(-2.60, 3.55, 2.05);
-const RIM_POS = new THREE.Vector3(2.95, 1.05, -2.30);
-const FILL_POS = new THREE.Vector3(1.85, 0.50, 2.40);
+// Behind and a little camera-right: barely off the view axis, which is what
+// keeps the wrap narrow. Nudging x back up towards +3 is what broke it before.
+const RIM_POS = new THREE.Vector3(0.85, 2.05, -3.70);
+// Shadow-side kicker. Moved out to ~48deg off the view axis (it used to sit at
+// ~27deg, which is frontal enough to flatten) and dropped below the subject, so
+// it models the shadow cheek and the backs of the hands instead of washing them.
+const FILL_POS = new THREE.Vector3(2.30, 0.35, 1.35);
 const ACCENT_POS = new THREE.Vector3(-1.05, 0.78, -1.15);
 const AIM = new THREE.Vector3(0, 1.15, 0); // chest height of an average subject
+// The rim aims higher than the rest of the rig so its cone core lands on the
+// head and shoulders for every race from Gnome to Tauren.
+const RIM_AIM = new THREE.Vector3(0, 1.55, 0);
+
+// Rim cone. 0.52 rad half-angle covers a 3 m subject at this distance; the
+// 0.65 penumbra means only the inner ~35% of the cone is at full strength, so
+// the rim falls to roughly half by the feet instead of being a flat slab.
+const RIM_ANGLE = 0.52;
+const RIM_PENUMBRA = 0.65;
+// three wants SpotLight intensity in candela, but a mood table full of candela
+// cannot be compared by eye with the key and fill, which are in lux. So MOODS
+// authors the rim in lux-at-the-aim-point and applyMoodSpec multiplies by d^2.
+const RIM_DIST2 = RIM_POS.distanceToSquared(RIM_AIM); // ~14.7 m^2
 
 // Shadow camera is fitted to a ~3 m tall subject standing at the origin.
 const SUBJECT_HEIGHT = 3.0;
@@ -30,23 +64,37 @@ const FADE_SECONDS = 0.20;
 
 // Faction moods. Colours are authored in sRGB; THREE.Color converts them into
 // the renderer's working space for us.
+//
+// All four intensities are in lux at the subject, so they can be read as a
+// ratio. rimI is converted to candela on the way into the SpotLight.
+//
+// The rim used to be the brightest light in the rig (3.6-4.1 lx flat over
+// every surface that faced it at all, against a 3.2-3.55 lx key). It is now
+// level-pegging with the key at the aim point, and because it is a cone it
+// falls to under half that by the boots -- so its average over the figure is
+// down by roughly a quarter on top of the halved wrap.
+//
+// The fill was 0.58-0.62 when the rim was doubling as a key. With the rim
+// pulled back to an edge the fill carries the shadow side on its own, so it is
+// up near 0.95 -- still under a third of the key, which is a modelling bounce,
+// not a frontal wash.
 const MOODS = {
   Alliance: {
     key: '#ffe2c2', keyI: 3.20,
-    rim: '#6fa8e0', rimI: 4.10,
-    fill: '#8ea6c6', fillI: 0.62,
+    rim: '#6fa8e0', rimI: 3.95,
+    fill: '#c3ad95', fillI: 0.96,
     accent: '#3a6ea8', accentI: 3.20
   },
   Horde: {
     key: '#ffc794', keyI: 3.55,
-    rim: '#e0704a', rimI: 3.80,
-    fill: '#c2967f', fillI: 0.58,
+    rim: '#e0704a', rimI: 3.70,
+    fill: '#c2967f', fillI: 0.92,
     accent: '#a33232', accentI: 3.60
   },
   Neutral: {
     key: '#ffe8c0', keyI: 3.30,
-    rim: '#9fb2da', rimI: 3.60,
-    fill: '#b3a888', fillI: 0.60,
+    rim: '#9fb2da', rimI: 3.80,
+    fill: '#b3a888', fillI: 0.94,
     accent: '#c8b878', accentI: 3.00
   }
 };
@@ -210,18 +258,29 @@ export function createLighting({ scene, renderer, bakery }) {
   group.add(key);
 
   // ------------------------------------------------------------------- rim --
-  // Low, behind, and on the opposite side from the key. This is the light
-  // that gives the character its edge — deliberately brighter than the key's
-  // diffuse contribution at grazing angles.
-  const rim = new THREE.DirectionalLight(0x9fb2da, 2.9);
+  // Behind the subject and only just off the view axis, so the terminator sits
+  // close to the silhouette and the lit band stays a rim rather than a second
+  // key. See the geometry note at the top of the file. A spot rather than a
+  // directional so it falls off with distance and so the cone can weight it
+  // towards the head and shoulders: at the Neutral 3.80 lx it lands as ~3.9 lx
+  // on a human head, ~3.6 lx at the hip and ~1.6 lx at the boots, where the old
+  // directional put a flat 3.6-4.1 lx on every surface that faced it at all.
+  const rimTarget = new THREE.Object3D();
+  rimTarget.name = 'lighting-aim-rim';
+  rimTarget.position.copy(RIM_AIM);
+  group.add(rimTarget);
+
+  const rim = new THREE.SpotLight(
+    0x9fb2da, MOODS.Neutral.rimI * RIM_DIST2, 0, RIM_ANGLE, RIM_PENUMBRA, 2
+  );
   rim.name = 'rim';
   rim.position.copy(RIM_POS);
-  rim.target = target;
+  rim.target = rimTarget;
   rim.castShadow = false;
   group.add(rim);
 
   // ------------------------------------------------------------------ fill --
-  const fill = new THREE.DirectionalLight(0xb3a888, 0.6);
+  const fill = new THREE.DirectionalLight(0xb3a888, 0.94);
   fill.name = 'fill';
   fill.position.copy(FILL_POS);
   fill.target = target;
@@ -335,14 +394,14 @@ function buildEnvironment(renderer, bakery) {
 
   try {
     const packed = bakery.bake(
-      'ibl-stonehall-dusk-v2',
+      'ibl-stonehall-dusk-v3', // v3: rim azimuth moved behind, so the cool spill moved with it
       IBL_FRAG,
       {
         width: IBL_WIDTH,
         height: IBL_HEIGHT,
         uniforms: {
           uKeyDir: KEY_POS.clone().sub(AIM).normalize(),
-          uRimDir: RIM_POS.clone().sub(AIM).normalize(),
+          uRimDir: RIM_POS.clone().sub(RIM_AIM).normalize(),
           uRange: IBL_RANGE
         },
         wrap: THREE.RepeatWrapping,
@@ -449,7 +508,8 @@ function newMoodState() {
 
 function applyMoodSpec(dst, spec) {
   dst.key.set(spec.key); dst.keyI = spec.keyI;
-  dst.rim.set(spec.rim); dst.rimI = spec.rimI;
+  // MOODS authors the rim in lux at the aim point; three wants candela.
+  dst.rim.set(spec.rim); dst.rimI = spec.rimI * RIM_DIST2;
   dst.fill.set(spec.fill); dst.fillI = spec.fillI;
   dst.accent.set(spec.accent); dst.accentI = spec.accentI;
 }
