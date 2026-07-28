@@ -61,10 +61,10 @@ function groundField(uvExpr, s, cheap = false) {
   vec2 c${s} = q${s} - 0.5;
   float r${s} = length(c${s}) * 2.0;
   float a${s} = atan(c${s}.y, c${s}.x);
-  vec3 w${s} = worley(vec3(q${s} * 9.0, 0.0), 1.0);
+  vec3 w${s} = worley(vec3(q${s} * 15.0, 0.0), 1.0);
   float seam${s} = w${s}.y - w${s}.x;
   // 1.0 on a flagstone face, 0.0 down in the mortar joint.
-  float joint${s} = smoothstep(0.008, 0.070, seam${s});
+  float joint${s} = smoothstep(0.010, 0.055, seam${s});
   // Two concentric engraved rings + spokes between them: reads as a dais kerb
   // rather than a random tile field, and it is perfectly seam-free in polar.
   float ring${s} = max(
@@ -85,7 +85,7 @@ function groundField(uvExpr, s, cheap = false) {
 
 function bakeGroundAlbedo(bakery) {
   return bake(bakery,
-    'backdrop-ground-albedo-v1',
+    'backdrop-ground-albedo-v2',
     /* glsl */ `
     ${groundField('vUv', '')}
 
@@ -93,7 +93,7 @@ function bakeGroundAlbedo(bakery) {
     float cellTone = fract(w.z * 7.31);
     vec3 stone = uStone * (0.80 + 0.40 * cellTone);
     stone *= 0.86 + 0.28 * grain;
-    stone = mix(stone * 0.30, stone, joint);          // recessed mortar is darker
+    stone = mix(stone * 0.55, stone, joint);          // recessed mortar is darker
     stone = mix(stone, stone * 0.55, cut);            // engraved kerb likewise
     stone *= 1.0 - pit * 0.35;
 
@@ -101,13 +101,13 @@ function bakeGroundAlbedo(bakery) {
     float grime = fbm(vec3(vUv * 3.0, 19.0), 5, 2.1, 0.55) * 0.5 + 0.5;
     stone *= mix(0.68, 1.12, grime);
     float dust = smoothstep(0.35, 0.9, fbm(vec3(vUv * 6.5, 41.0), 4, 2.0, 0.5) * 0.5 + 0.5);
-    stone = mix(stone, stone * uDust, dust * 0.5);
+    stone = mix(stone, stone * uDust, dust * 0.35);
 
     // Radial falloff to nothing. The bounds wobble with an angularly-continuous
     // fbm so the rim is never a perfect circle (no floating-platform edge).
     float wob = fbm(vec3(cos(a) * 2.0, sin(a) * 2.0, 3.0), 3, 2.0, 0.5) * 0.07;
-    float fall = 1.0 - smoothstep(0.20 + wob, 0.94 + wob, r);
-    fall = pow(clamp(fall, 0.0, 1.0), 1.5);
+    float fall = 1.0 - smoothstep(0.17 + wob, 0.92 + wob, r);
+    fall = pow(clamp(fall, 0.0, 1.0), 1.8);
     stone *= fall;
 
     float alpha = smoothstep(0.0, 0.30, fall);
@@ -119,8 +119,8 @@ function bakeGroundAlbedo(bakery) {
       wrap: THREE.ClampToEdgeWrapping,
       colorSpace: THREE.SRGBColorSpace,
       uniforms: {
-        uStone: new THREE.Color(0.150, 0.147, 0.143),
-        uDust: new THREE.Color(1.10, 1.02, 0.88)
+        uStone: new THREE.Color(0.082, 0.081, 0.082),
+        uDust: new THREE.Color(1.06, 1.01, 0.92)
       }
     }
   );
@@ -128,7 +128,7 @@ function bakeGroundAlbedo(bakery) {
 
 function bakeGroundRough(bakery) {
   return bake(bakery,
-    'backdrop-ground-rough-v1',
+    'backdrop-ground-rough-v2',
     /* glsl */ `
     ${groundField('vUv', '', true)}
     float rough = mix(0.98, 0.62, joint);   // polished-ish faces, rough joints
@@ -147,7 +147,7 @@ function bakeGroundRough(bakery) {
 function bakeGroundNormal(bakery) {
   const e = (1.6 / 1024).toFixed(6);
   return bake(bakery,
-    'backdrop-ground-normal-v1',
+    'backdrop-ground-normal-v2',
     /* glsl */ `
     vec2 ex = vec2(${e}, 0.0);
     vec2 ey = vec2(0.0, ${e});
@@ -281,7 +281,7 @@ function bakeRuneRing(bakery) {
 // uniform push, never a re-bake.
 function bakeSky(bakery) {
   return bake(bakery,
-    'backdrop-sky-v1',
+    'backdrop-sky-v2',
     /* glsl */ `
     float u = vUv.x;
     float v = vUv.y;
@@ -312,14 +312,14 @@ function bakeSky(bakery) {
     float pf = fract(u * pn);
     float pw = 0.13 + hash1(vec2(pid, 3.0)) * 0.11;
     float ptop = 0.585 + hash1(vec2(pid, 9.0)) * 0.075;
-    float shape = 1.0 - smoothstep(pw, pw + 0.085, abs(pf - 0.5));
+    float shape = 1.0 - smoothstep(pw, pw + 0.135, abs(pf - 0.5));
     float vert = (1.0 - smoothstep(ptop, ptop + 0.075, v)) * smoothstep(0.330, 0.430, v);
     float pillar = shape * vert;
     // Capital: a slightly wider block where the pillar tops out.
     float cap = (1.0 - smoothstep(pw + 0.05, pw + 0.13, abs(pf - 0.5)))
       * (1.0 - smoothstep(0.020, 0.045, abs(v - ptop)));
     pillar = clamp(pillar + cap * 0.8, 0.0, 1.0);
-    col *= 1.0 - pillar * 0.62;
+    col *= 1.0 - pillar * 0.44;
 
     // A cornice line above the colonnade, and a faint floor line below it.
     float cornice = (1.0 - smoothstep(0.006, 0.020, abs(v - 0.672))) * 0.35;
@@ -402,10 +402,10 @@ export function createBackdrop({ scene, bakery }) {
     map: bakeGroundAlbedo(bakery),
     normalMap: bakeGroundNormal(bakery),
     roughnessMap: bakeGroundRough(bakery),
-    normalScale: new THREE.Vector2(0.65, 0.65),
+    normalScale: new THREE.Vector2(0.42, 0.42),
     roughness: 1.0,
     metalness: 0.0,
-    envMapIntensity: 0.45,
+    envMapIntensity: 0.35,
     transparent: true,      // the alpha in the albedo dissolves the rim
     depthWrite: true,
     side: THREE.FrontSide
@@ -601,7 +601,7 @@ export function createBackdrop({ scene, bakery }) {
   primed = false;   // the first real setFaction from the store still snaps
 
   // Intensities. Deliberately small: this is a whisper of colour, not a light.
-  const GLYPH_LEVEL = 0.30;
+  const GLYPH_LEVEL = 0.26;
   const RUNE_LEVEL = 0.16;
   const MOTE_LEVEL = 0.16;
   const SKY_TINT = 0.85;

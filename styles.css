@@ -223,9 +223,11 @@ body {
   align-items: center;
   gap: 18px;
   padding: 10px 20px 12px;
+  /* Holds >=0.9 alpha through the whole type band, then falls away — the bar
+     text keeps AA contrast even when the character is blown out behind it. */
   background:
-    linear-gradient(180deg, rgba(4, 5, 9, 0.94) 0%, rgba(4, 5, 9, 0.7) 62%, rgba(4, 5, 9, 0) 100%);
-  border-bottom: 0;
+    linear-gradient(180deg, rgba(4, 5, 9, 0.97) 0%, rgba(4, 5, 9, 0.93) 70%,
+                    rgba(4, 5, 9, 0.46) 88%, rgba(4, 5, 9, 0) 100%);
 }
 
 .title-left { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
@@ -689,7 +691,8 @@ body {
 
 .actionbar {
   padding: 8px 20px 16px;
-  background: linear-gradient(0deg, rgba(3, 4, 8, 0.95) 0%, rgba(3, 4, 8, 0.72) 58%, rgba(3, 4, 8, 0) 100%);
+  background: linear-gradient(0deg, rgba(3, 4, 8, 0.97) 0%, rgba(3, 4, 8, 0.94) 62%,
+                              rgba(3, 4, 8, 0.44) 86%, rgba(3, 4, 8, 0) 100%);
 }
 
 .bar-inner {
@@ -707,8 +710,12 @@ body {
   align-items: center;
   gap: 2px;
   min-width: 0;
+  padding: 3px 30px;
   text-align: center;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
+  /* local plate so the hero line never sits directly on the character */
+  background: radial-gradient(64% 130% at 50% 50%,
+    rgba(3, 4, 8, 0.88) 0%, rgba(3, 4, 8, 0.62) 55%, rgba(3, 4, 8, 0) 100%);
 }
 .sum-name {
   font-family: var(--serif);
