@@ -228,7 +228,7 @@ function bakeGlyphRing(bakery) {
     float g = ringA * 0.95 + ringB * 0.50 + ringC * 0.32 + ringD * 0.18
             + dash * 0.85 + tick * 0.70 + pool;
 
-    // Worn, uneven emission — a cast inlay, not a decal.
+    // Worn, uneven emission: a cast inlay, not a decal.
     g *= 0.70 + 0.30 * (fbm(vec3(cos(a) * 4.0, sin(a) * 4.0, r * 6.0), 4, 2.1, 0.55) * 0.5 + 0.5);
     g *= 1.0 - smoothstep(0.90, 1.0, r);
 
@@ -300,7 +300,7 @@ function bakeSky(bakery) {
     float mottle = fbm(vec3(dir * 2.4, v * 3.0), 4, 2.1, 0.55);
     col *= 1.0 + mottle * 0.22;
 
-    // Subtle vertical banding — drapes / flutes, blurred to nothing.
+    // Subtle vertical banding: drapes / flutes, blurred to nothing.
     float bandN = fbm(vec3(dir * 11.0, 0.5), 3, 2.0, 0.5);
     float bandFade = smoothstep(0.34, 0.62, v) * (1.0 - smoothstep(0.70, 0.95, v));
     col *= 1.0 + bandN * 0.30 * bandFade;
@@ -491,7 +491,7 @@ export function createBackdrop({ scene, bakery }) {
         vec4 skyTexel = texture2D( map, vMapUv );
         // The faction tint *modulates* the baked gradient instead of being added
         // to it. uFaction is luminance-normalised, so a retint shifts hue without
-        // ever lifting the backdrop out of its value range — which is the whole
+        // ever lifting the backdrop out of its value range, which is the whole
         // reason the character stays readable against it.
         diffuseColor.rgb *= skyTexel.rgb * mix( uBase, uFaction, skyTexel.a * uFactionStrength );
         diffuseColor.a = 1.0;

@@ -32,7 +32,7 @@
   --sans: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
 
   --rail-w: clamp(276px, 25vw, 340px);
-  --label-w: 68px;
+  --label-w: 64px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   color-scheme: dark;
@@ -83,10 +83,11 @@ body {
   pointer-events: none;
 }
 
-.titlebar { grid-area: title; pointer-events: auto; }
+/* The bars sit above the rails' bleeding scrims. */
+.titlebar { grid-area: title; pointer-events: auto; position: relative; z-index: 4; }
 .rail-left { grid-area: left; }
 .rail-right { grid-area: right; }
-.actionbar { grid-area: bar; pointer-events: auto; }
+.actionbar { grid-area: bar; pointer-events: auto; position: relative; z-index: 4; }
 
 /* --------------------------------------------------------------------------
    Rails — scrim + scroll
@@ -483,8 +484,8 @@ body {
 
 .ctl-label {
   font-family: var(--serif);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--ink-2);
   text-shadow: 0 1px 0 #000;
@@ -601,11 +602,14 @@ body {
 
 /* Swatches --------------------------------------------------------------- */
 
-.swatches { display: flex; flex-wrap: wrap; gap: 5px; }
+/* Six fixed columns: the palettes never reflow, whatever the rail width. */
+.swatches { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
 
 .swatch {
   position: relative;
-  width: 24px; height: 24px;
+  width: 100%;
+  max-width: 27px;
+  aspect-ratio: 1;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -874,7 +878,7 @@ body.entering .ui-root { animation: recede 1.5s var(--ease) forwards; }
   .ctl-slider > .ctl-value { grid-area: 1 / 2 / 2 / 3; }
   .ctl-slider > .range { grid-area: 2 / 1 / 3 / 3; }
   .ctl-swatch { grid-template-columns: minmax(0, 1fr); }
-  .swatch { width: 22px; height: 22px; }
+  .swatch { max-width: 24px; }
   .swatches { gap: 4px; }
   .seg-wide .seg-btn { font-size: clamp(8.5px, 0.8vw, 11px); letter-spacing: 0; padding: 6px 2px; }
   .step-btn { font-size: 13px; }
@@ -917,7 +921,7 @@ body.entering .ui-root { animation: recede 1.5s var(--ease) forwards; }
 @media (max-width: 620px) {
   .ui-root {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(90px, 1fr) minmax(0, 30vh) minmax(0, 30vh) auto;
+    grid-template-rows: auto minmax(110px, 1fr) minmax(0, 27vh) minmax(0, 27vh) auto;
     grid-template-areas:
       "title"
       "stage"
