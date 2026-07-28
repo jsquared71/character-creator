@@ -265,7 +265,6 @@ body {
   border: 9px solid transparent;
   border-image: var(--frame-button) 18 / 9px / 0 round;
   background: linear-gradient(180deg, rgba(12, 14, 20, 0.92), rgba(4, 5, 9, 0.95));
-  background-clip: padding-box;
 }
 .seg-wide { display: flex; width: 100%; }
 .seg-wide .seg-btn { flex: 1; }
@@ -430,8 +429,17 @@ body {
   box-shadow:
     inset 0 0 0 1px rgba(0, 0, 0, 0.8),
     0 0 0 2px var(--class-color, var(--gold-hi)),
-    0 0 20px color-mix(in srgb, var(--class-color, #ecd18b) 60%, transparent),
+    0 0 20px rgba(236, 209, 139, 0.5),
     0 5px 14px rgba(0, 0, 0, 0.75);
+}
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  .tile-class.is-on {
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.8),
+      0 0 0 2px var(--class-color, var(--gold-hi)),
+      0 0 20px color-mix(in srgb, var(--class-color, #ecd18b) 60%, transparent),
+      0 5px 14px rgba(0, 0, 0, 0.75);
+  }
 }
 .tile-class:hover { border-color: var(--class-color, var(--gold-hi)); }
 
@@ -695,7 +703,6 @@ body {
   border: 9px solid transparent;
   border-image: var(--frame-button) 18 / 9px / 0 round;
   background: linear-gradient(180deg, rgba(30, 28, 20, 0.95), rgba(8, 8, 12, 0.96));
-  background-clip: padding-box;
   color: var(--gold);
   font-family: var(--serif);
   font-size: 14px;
@@ -715,12 +722,16 @@ body {
   background:
     linear-gradient(180deg, #fff3cb 0%, #e7c268 42%, #b3892a 72%, #7d5c14 100%);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
-  box-shadow: 0 0 26px color-mix(in srgb, var(--f-glow) 55%, transparent);
+  box-shadow: 0 0 26px rgba(255, 214, 130, 0.5);
 }
 .btn-hero:hover {
   color: #1b1204;
   background: linear-gradient(180deg, #fffaee 0%, #f6da8e 42%, #c99c33 72%, #8d6a19 100%);
-  box-shadow: 0 0 42px color-mix(in srgb, var(--f-glow) 85%, transparent);
+  box-shadow: 0 0 42px rgba(255, 226, 150, 0.75);
+}
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  .btn-hero { box-shadow: 0 0 26px color-mix(in srgb, var(--f-glow) 55%, transparent); }
+  .btn-hero:hover { box-shadow: 0 0 42px color-mix(in srgb, var(--f-glow) 85%, transparent); }
 }
 .btn-hero .btn-label { position: relative; }
 

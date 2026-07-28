@@ -125,7 +125,7 @@ function conform(g, trim = 0) {
 
 /** Non-indexed rebuild so shading reads faceted (used for plate / crystal bits). */
 function facet(g) {
-  const f = g.toNonIndexed();
+  const f = g.index ? g.toNonIndexed() : g;
   f.computeVertexNormals();
   const count = f.attributes.position.count;
   const idx = new Uint32Array(count);
@@ -955,10 +955,10 @@ function buildBracers(ctx) {
     const pts = [];
     const segs = 5;
     for (let i = 0; i <= segs; i++) pts.push(elbow.clone().lerp(wrist, i / segs));
-    const rWrist = h.r * 1.30 + T.offset * u * 0.7;
-    const rElbow = h.r * 1.72 * M.armThick * 0.9 + T.offset * u * 0.9;
+    const rWrist = h.r * 1.06 + T.offset * u * 0.26;
+    const rElbow = h.r * 1.30 * lerp(1, M.armThick, 0.4) + T.offset * u * 0.36;
 
-    const flareTop = A.tier === 'plate' ? 1.32 : A.tier === 'cloth' ? 1.55 : 1.10;
+    const flareTop = A.tier === 'plate' ? 1.20 : A.tier === 'cloth' ? 1.34 : 1.06;
     const bracer = sweep(framesAlong(pts, V3(1, 0, 0)), ellipse(10, 1, 0.88), {
       capStart: false, capEnd: false,
       scale: (t) => {
@@ -1034,7 +1034,7 @@ function buildBoots(ctx) {
     // shaft
     const pts = [];
     const sSteps = 5;
-    const ankleY = soleY + ankleH * 0.9;
+    const ankleY = soleY + ankleH * (hoof ? 0.5 : 0.9);
     for (let i = 0; i <= sSteps; i++) {
       const t = i / sSteps;
       pts.push(V3(f.p.x, lerp(ankleY, shaftTop, t), f.p.z + (hoof ? 0.01 * u : -footLen * 0.06 * t)));
@@ -1053,11 +1053,11 @@ function buildBoots(ctx) {
     part.add(shaft);
 
     if (A.tier === 'plate') {
-      // knee-ward greave flare + kneecap
-      const kneeY = shaftTop + M.H * 0.03;
-      const cop = new THREE.SphereGeometry(rTop * 1.15, 8, 6, 0, TAU, 0, Math.PI * 0.6);
+      // poleyn capping the greave; kept clear of the ground on short hoof boots
+      const cop = new THREE.SphereGeometry(rTop * 0.98, 8, 6, 0, TAU, 0, Math.PI * 0.6);
       const q = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), V3(0, 0.35, 1).normalize());
-      part.add(facet(cop), mat().compose(V3(f.p.x, kneeY - rTop * 0.4, f.p.z + rTop * 0.35), q, V3(1, 1.1, 0.9)), 0.5);
+      const cy = Math.max(shaftTop - rTop * 0.10, soleY + rTop * 1.05);
+      part.add(facet(cop), mat().compose(V3(f.p.x, cy, f.p.z + rTop * 0.30), q, V3(1, 1.1, 0.9)), 0.5);
     } else if (A.tier === 'leather' || A.tier === 'mail') {
       for (let k = 0; k < 2; k++) {
         const y = lerp(ankleY, shaftTop, 0.35 + k * 0.42);

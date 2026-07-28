@@ -468,8 +468,8 @@ function headSurface(P, theta, phi) {
 }
 
 function buildHead(mb, P) {
-  const LAT = 34;
-  const LON = 44;
+  const LAT = 40;
+  const LON = 52;
   const grid = [];
   for (let i = 0; i <= LAT; i++) {
     const phi = (i / LAT) * Math.PI;
@@ -482,7 +482,12 @@ function buildHead(mb, P) {
       // cranium and the neck stump a little.
       const yn = Math.cos(phi);
       const front = Math.max(0, Math.sin(phi) * Math.cos(theta));
-      const w = lerp(0.35, 0.0, sat(front * 1.4)) * smoothstep(0.95, 0.2, yn);
+      // Relax the cranium a little, freeze the face, and freeze the neck stump
+      // (its pole fan would otherwise collapse into degenerate triangles).
+      const w =
+        lerp(0.35, 0.0, sat(front * 1.4)) *
+        smoothstep(0.95, 0.2, yn) *
+        smoothstep(-0.98, -0.60, yn);
       row.push(mb.vert(p, j / LON, 1 - i / LAT, w));
     }
     grid.push(row);
@@ -845,7 +850,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
     0.16 * Math.sin(Math.PI * sat(t / 0.62)) +
     0.09 * smoothstep(0.45, 0.98, t);
 
-  const SPINE_SEGS = 20;
+  const SPINE_SEGS = 24;
   const spinePts = [];
   const spineAng = [];
   {
@@ -928,13 +933,25 @@ export function buildBodyGeometry(build, features, opts = {}) {
     };
   });
 
+  // A trapezius hump over the shoulder blades. Nearly invisible on upright
+  // races, unmistakable on the hunched ones — it is the cue that separates a
+  // leaning figure from a genuinely hunched one in a 200px silhouette.
+  const humpAmt = unit * (0.10 + 1.35 * Math.max(0, B.posture)) * (0.6 + 0.4 * B.chest);
   loftTube(torsoMB, {
     path: torsoPath,
     rings: torsoRings,
-    radial: 30,
+    radial: 36,
     upHint: V3(0, 0, 1),
     capStart: 'round',
-    capEnd: 'flat'
+    capEnd: 'flat',
+    deform: (p, i, j, th, f) => {
+      const t = i / SPINE_SEGS;
+      const w = gauss(t - 0.92, 0.13) * Math.max(0, -Math.cos(th));
+      if (w > 0.001) {
+        p.addScaledVector(f.z, -humpAmt * w);
+        p.y += humpAmt * 0.45 * w;
+      }
+    }
   });
 
   const frames = makeFrames(torsoPath, V3(0, 0, 1));
@@ -975,8 +992,8 @@ export function buildBodyGeometry(build, features, opts = {}) {
     tube(mb, [shoulder, elbow, wrist], armRings, {
       aspect: [[0, 0.92], [0.45, 0.86], [1, 0.78]],
       weight: armWeights,
-      radial: 16,
-      segments: 15,
+      radial: 20,
+      segments: 19,
       capStart: 'none',
       capEnd: 'none',
       upHint: V3(0, 0, 1)
@@ -1072,8 +1089,8 @@ export function buildBodyGeometry(build, features, opts = {}) {
       aspect: [[0, 0.90], [0.5, 0.88], [1, 0.86]],
       back: [[0, 1.06], [0.55, 1.14], [0.8, 1.0], [1, 1.0]],
       weight: wts,
-      radial: 18,
-      segments: 17,
+      radial: 22,
+      segments: 21,
       capStart: 'none',
       capEnd: 'none',
       upHint: V3(0, 0, 1)
@@ -1086,9 +1103,11 @@ export function buildBodyGeometry(build, features, opts = {}) {
     let contactZ = ankle.z;
 
     if (footStyle === 'hoof') {
-      // Short flared column with a flat sole and a cleft down the front.
-      const top = V3(ankle.x, ankle.y * 0.98, ankle.z);
-      const bottom = V3(ankle.x, 0, ankle.z + ankle.y * 0.22);
+      // Short flared column with a flat sole and a cleft down the front. The
+      // path is dead vertical so the sole lands flat on y = 0.
+      const hz = ankle.z + ankle.y * 0.16;
+      const top = V3(ankle.x, ankle.y * 0.98, hz);
+      const bottom = V3(ankle.x, 0, hz);
       const path = samplePath([top, bottom], 7);
       const rings = path.map((_, i) => {
         const t = i / 6;
@@ -1162,7 +1181,8 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const neckEnd = torsoPath[torsoPath.length - 1];
   const topAngle = spineAng[SPINE_SEGS] * 0.45;
   const headDir = V3(0, Math.cos(topAngle), Math.sin(topAngle));
-  const headCentre = neckEnd.clone().addScaledVector(headDir, P.ry * 0.46 + neckR * 0.15);
+  // Seat the skull so its neck stump sinks well into the throat column.
+  const headCentre = neckEnd.clone().addScaledVector(headDir, P.ry * 0.40 + neckR * 0.12);
   const headQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(topAngle * 0.9, 0, 0));
   const headM = new THREE.Matrix4().compose(headCentre, headQuat, V3(1, 1, 1));
 
@@ -1292,7 +1312,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
   const detailParts = [];
   if (F.scales > 0.35) {
     const dmb = new MeshBuilder(UV.detail);
-    for (let i = 3; i <= SPINE_SEGS - 1; i += 2) {
+    for (let i = 3; i <= SPINE_SEGS - 1; i += 3) {
       const f = frames[i];
       const t = i / SPINE_SEGS;
       const back = f.z.clone().negate();

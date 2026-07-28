@@ -93,7 +93,9 @@ function createCardGeometry() {
   for (let i = 0; i < CARD_RINGS; i++) {
     const v = i / segs;
     // Slightly convex taper — fuller at the root, pinched at the tip.
-    const w = Math.pow(CARD_TIP, v) * (1 - 0.10 * v * (1 - v) * 4 * -1);
+    // The pow() term is the chain-matching taper; the bulge term is 0 at
+    // both ends so consecutive cards still meet exactly.
+    const w = Math.pow(CARD_TIP, v) * (1 + 0.28 * v * (1 - v));
     const ang = CARD_TWIST * v;
     const ca = Math.cos(ang);
     const sa = Math.sin(ang);
@@ -474,7 +476,7 @@ export function buildHairGeometry(race, features, joints, opts) {
 
   if (!strands.length) return null;
 
-  return assemble(strands, material, rng, raceName, style.id);
+  return assemble(strands, material, raceName, style.id);
 }
 
 /* -------------------------- emitters ------------------------------ */
@@ -754,7 +756,9 @@ function emitTopknot(ctx) {
       tint: tintFor(ctx),
       seed: rng(),
       twist: (rng() - 0.5) * 1.0,
-      face: null,
+      // Cards face outward from the knot's axis.
+      face: ctx.right.clone().multiplyScalar(Math.cos(a))
+        .addScaledVector(fwd, Math.sin(a)),
       priority: 3
     });
   }
@@ -819,7 +823,8 @@ function emitTwinTails(ctx) {
         tint: tintFor(ctx),
         seed: rng(),
         twist: (rng() - 0.5) * 0.9,
-        face: null,
+        face: up.clone().multiplyScalar(Math.cos(a))
+          .addScaledVector(fwd, Math.sin(a)),
         priority: 3
       });
     }
@@ -881,7 +886,9 @@ function emitBraids(ctx) {
         tint: tintFor(ctx),
         seed: rng(),
         twist: 0.4,
-        face: null,
+        // Radial from the rope axis at the plait's midpoint.
+        face: n1.clone().multiplyScalar(Math.cos(phase + 0.675 * Math.PI * 2))
+          .addScaledVector(n2, Math.sin(phase + 0.675 * Math.PI * 2)),
         priority: 3
       });
     }
@@ -944,11 +951,9 @@ function emitCrest(ctx) {
   for (let i = 0; i < rows; i++) {
     const s = (i + 0.5) / rows;
     // Arc from the front hairline over the crown to the nape.
+    // Signed arc: negative sweeps down the forehead, positive down the nape.
     const theta = lerp(-1.05, 1.65, s);
-    const phi = theta < 0 ? 0 : Math.PI; // front half vs back half
-    const th = Math.abs(theta);
-    domePoint(ctx.frame, th, theta < 0 ? 0 : Math.PI, dir);
-    void phi;
+    domePoint(ctx.frame, Math.abs(theta), theta < 0 ? 0 : Math.PI, dir);
     const rootBase = center.clone().addScaledVector(dir, R * 0.99);
 
     // Classic mohawk profile: tallest just behind the crown.
@@ -991,7 +996,7 @@ function emitCrest(ctx) {
 
 /** Tauren (and Worgen ruff) — a mane running from the nape down the neck. */
 function emitMane(ctx, joints) {
-  const { rng, R, center, up, fwd, right, profile, style } = ctx;
+  const { rng, R, center, up, fwd, right, profile } = ctx;
   const neck = joints && joints.neck;
   const neckPos = neck && neck.position
     ? neck.position.clone()
@@ -1040,11 +1045,12 @@ function emitMane(ctx, joints) {
         tint: clamp01(tintFor(ctx) * 0.9),
         seed: rng(),
         twist: (rng() - 0.5) * 0.6,
+        // Mane cards lie across the back of the neck.
+        face: fwd.clone().multiplyScalar(-1).addScaledVector(right, u * 0.8),
         priority: 3
       });
     }
   }
-  void style;
 }
 
 /* ---------------------- facial hair ------------------------------- */
@@ -1122,7 +1128,7 @@ function emitBeard(ctx, plan) {
 }
 
 function emitMustache(ctx, plan) {
-  const { rng, R, center, up, fwd, right, profile } = ctx;
+  const { rng, R, center, up, right, profile } = ctx;
   const n = 14;
   const dir = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
@@ -1151,12 +1157,11 @@ function emitMustache(ctx, plan) {
       face: dir.clone(),
       priority: 3
     });
-    void fwd;
   }
 }
 
 function emitSideburns(ctx, plan) {
-  const { rng, R, center, up, right, profile } = ctx;
+  const { rng, R, center, up, profile } = ctx;
   for (let s = -1; s <= 1; s += 2) {
     for (let i = 0; i < 7; i++) {
       const theta = lerp(1.35, 2.0, i / 6) + (rng() - 0.5) * 0.1;
@@ -1183,7 +1188,6 @@ function emitSideburns(ctx, plan) {
         face: dir.clone(),
         priority: 3
       });
-      void right;
     }
   }
 }
@@ -1315,7 +1319,7 @@ function emitRuff(ctx, plan, joints) {
  * assembly
  * ------------------------------------------------------------------ */
 
-function assemble(strands, material, rng, raceName, styleId) {
+function assemble(strands, material, raceName, styleId) {
   // Budget: keep high-priority strands (crest, braid, beard, mane), thin the
   // scalp field at random until we fit.
   const order = strands.slice().sort((a, b) => (b.priority - a.priority) || (a.rank - b.rank));
@@ -1429,7 +1433,6 @@ function assemble(strands, material, rng, raceName, styleId) {
     instances: count,
     attributes: ['aStrandSeed', 'aStrandTint']
   };
-  void rng;
   return mesh;
 }
 
