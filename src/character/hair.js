@@ -44,6 +44,8 @@ const CARD_TIP = 0.74;
 // join. Changing one without the other puts a visible facet at every seam.
 const CARD_TWIST = 0.10;
 const CARD_THICK = 0.22; // half-thickness relative to half-width
+// Widest a card is allowed to be relative to its own length. See `assemble`.
+const MAX_CARD_ASPECT = 0.95;
 
 const UP_Y = new THREE.Vector3(0, 1, 0);
 
@@ -305,58 +307,70 @@ function skullOf(ctx, inflate) {
  * style + race tables
  * ------------------------------------------------------------------ */
 
+// FEWER, WIDER CARDS. `width` is up by roughly half and `strands` down by
+// roughly a third against round 2, at close to the same instance count.
+//
+// The card map paints its fibres across the ribbon's face, so how many hairs
+// you can actually see is set by how many *pixels* wide the card is, not by how
+// many cards there are. At round 2's 0.32 R the mass card was ~40 px across at
+// face framing carrying 13 painted fibres — 3 px per fibre including its gap,
+// which no mip chain can hold on to. The card filled in solid and every one of
+// them read as a flat dark shard. Wider cards with fewer, finer hairs on them
+// is the trade that makes the fibres survive; materials/hair.js dropped its
+// fibre counts to match, and 16% of each card's width is now bare border, which
+// the extra width pays for.
 const STYLES = [
   {
     id: 'long', name: 'Long Flowing',
-    strands: 132, length: 3.3, segs: 6, gravity: 0.62, stiff: 0.16, outward: 0.22,
-    noise: 0.09, curl: 0.06, width: 0.32, thetaFront: 1.02, thetaBack: 2.10,
-    cap: 1.0, flow: 0.38, part: 0.42, fringe: 0.30
+    strands: 80, length: 3.3, segs: 6, gravity: 0.62, stiff: 0.16, outward: 0.16,
+    noise: 0.09, curl: 0.06, width: 0.50, thetaFront: 1.02, thetaBack: 2.10,
+    cap: 1.0, flow: 0.38, part: 0.42, fringe: 0.34
   },
   {
     id: 'braid', name: 'Braided',
-    strands: 84, length: 1.10, segs: 4, gravity: 0.34, stiff: 0.42, outward: 0.20,
-    noise: 0.05, curl: 0.02, width: 0.30, thetaFront: 0.96, thetaBack: 1.92,
+    strands: 58, length: 1.10, segs: 4, gravity: 0.34, stiff: 0.42, outward: 0.15,
+    noise: 0.05, curl: 0.02, width: 0.46, thetaFront: 0.96, thetaBack: 1.92,
     cap: 1.0, flow: 0.88, part: 0.15, fringe: 0.55,
     gather: 'nape', braid: true
   },
   {
     id: 'topknot', name: 'Topknot',
-    strands: 92, length: 1.00, segs: 4, gravity: 0.20, stiff: 0.50, outward: 0.16,
-    noise: 0.05, curl: 0.02, width: 0.29, thetaFront: 0.92, thetaBack: 1.78,
+    strands: 60, length: 1.00, segs: 4, gravity: 0.20, stiff: 0.50, outward: 0.12,
+    noise: 0.05, curl: 0.02, width: 0.46, thetaFront: 0.92, thetaBack: 1.78,
     cap: 0.9, flow: 0.92, part: 0.10, fringe: 0.6,
     gather: 'crown', plume: true
   },
   {
     id: 'mohawk', name: 'Mohawk',
-    strands: 34, length: 0.50, segs: 3, gravity: 0.42, stiff: 0.60, outward: 0.40,
-    noise: 0.16, curl: 0.0, width: 0.20, thetaFront: 1.05, thetaBack: 1.85,
+    strands: 28, length: 0.50, segs: 3, gravity: 0.42, stiff: 0.60, outward: 0.32,
+    noise: 0.16, curl: 0.0, width: 0.32, thetaFront: 1.05, thetaBack: 1.85,
     cap: 0.35, flow: 0.5, part: 0.2, fringe: 0.8,
     shaved: true, crest: 1.0
   },
   {
     id: 'crop', name: 'Short Crop',
-    strands: 180, length: 0.55, segs: 3, gravity: 0.40, stiff: 0.58, outward: 0.55,
-    noise: 0.17, curl: 0.0, width: 0.24, thetaFront: 1.14, thetaBack: 2.00,
+    strands: 112, length: 0.62, segs: 3, gravity: 0.40, stiff: 0.58, outward: 0.38,
+    noise: 0.17, curl: 0.0, width: 0.40, thetaFront: 1.14, thetaBack: 2.00,
     cap: 1.15, flow: 0.45, part: 0.25, fringe: 0.85
   },
   {
     id: 'swept', name: 'Swept Back',
-    strands: 138, length: 1.50, segs: 5, gravity: 0.30, stiff: 0.52, outward: 0.20,
-    noise: 0.06, curl: 0.03, width: 0.28, thetaFront: 1.02, thetaBack: 2.05,
+    strands: 86, length: 1.50, segs: 5, gravity: 0.30, stiff: 0.52, outward: 0.15,
+    noise: 0.06, curl: 0.03, width: 0.46, thetaFront: 1.02, thetaBack: 2.05,
     cap: 1.0, flow: 1.0, part: 0.05, fringe: 0.7,
     sweep: 1.0
   },
   {
     id: 'twin', name: 'Twin Tails',
-    strands: 104, length: 0.95, segs: 4, gravity: 0.28, stiff: 0.46, outward: 0.18,
-    noise: 0.05, curl: 0.03, width: 0.29, thetaFront: 1.00, thetaBack: 1.92,
+    strands: 66, length: 0.95, segs: 4, gravity: 0.28, stiff: 0.46, outward: 0.14,
+    noise: 0.05, curl: 0.03, width: 0.46, thetaFront: 1.00, thetaBack: 1.92,
     cap: 1.0, flow: 0.8, part: 0.35, fringe: 0.5,
     gather: 'twin', tails: true
   },
   {
     id: 'wild', name: 'Wild / Matted',
-    strands: 118, length: 2.0, segs: 5, gravity: 0.40, stiff: 0.34, outward: 0.62,
-    noise: 0.30, curl: 0.16, width: 0.34, thetaFront: 1.12, thetaBack: 2.12,
+    strands: 74, length: 2.0, segs: 5, gravity: 0.40, stiff: 0.34, outward: 0.48,
+    noise: 0.30, curl: 0.16, width: 0.52, thetaFront: 1.12, thetaBack: 2.12,
     cap: 1.1, flow: 0.32, part: 0.35, fringe: 0.6,
     clump: 1.0
   }
@@ -589,6 +603,7 @@ export function buildHairGeometry(race, features, joints, opts) {
 
   emitCapLayer(ctx);
   emitScalp(ctx);
+  emitFlyaway(ctx);
   if (style.gather === 'nape' || style.braid) emitBraids(ctx);
   if (style.plume) emitTopknot(ctx);
   if (style.tails) emitTwinTails(ctx);
@@ -705,8 +720,8 @@ function emitCapLayer(ctx) {
   // the crown, seen from the front, the whole layer collapses to a set of thin
   // lines and the skin comes through between them. Fanning the passes across
   // the flow guarantees that from any angle one pass is still presenting area.
-  const n = Math.round(40 * style.cap * clamp(profile.density, 0.5, 1.4));
-  const fan = [0, 1.15, -1.15, 2.55];
+  const n = Math.round(30 * style.cap * clamp(profile.density, 0.5, 1.4));
+  const fan = [0, 1.20, -1.20];
   const dir = new THREE.Vector3();
   const nrm = new THREE.Vector3();
   const root = new THREE.Vector3();
@@ -723,7 +738,7 @@ function emitCapLayer(ctx) {
       // Sit the cap a hair proud of the skin: buried roots are invisible roots.
       rootAt(ctx, dir, 1.006 + pass * 0.008, root);
       const P = {
-        length: R * (0.58 - pass * 0.06) * profile.length,
+        length: R * (0.78 - pass * 0.06) * profile.length,
         segs: 1,
         gravity: (pass === 0 ? 0.32 : 0.18) * profile.gravity,
         stiff: 0.74,
@@ -736,11 +751,18 @@ function emitCapLayer(ctx) {
       const a = fan[pass] + (rng() - 0.5) * 0.35;
       side.crossVectors(nrm, flow);
       const d0 = flow.clone().multiplyScalar(Math.cos(a)).addScaledVector(side, Math.sin(a));
-      d0.addScaledVector(nrm, 0.24);
+      // Barely lifted. At 0.24 these plates stood proud of the crown and their
+      // corners were a large part of what spiked the silhouette; the cap's job
+      // is to fill the parting from underneath, not to contribute an outline.
+      d0.addScaledVector(nrm, 0.09);
       const pts = growStrand(rng, root, d0, P);
       pushStrand(ctx, pts, {
-        width: strandWidth(ctx, 1.60 - pass * 0.10),
-        tint: clamp01(tintFor(ctx) * (0.70 + pass * 0.06)),
+        width: strandWidth(ctx, 1.10 - pass * 0.06),
+        // Deliberately at the dark end of the range. This is the layer the
+        // outer hair is meant to be sitting in front of, and the material reads
+        // aStrandTint as a straight value multiplier, so a dark cap is what
+        // gives the mass somewhere to be deep.
+        tint: clamp01(tintFor(ctx) * (0.34 + pass * 0.05)),
         seed: rng(),
         twist: (rng() - 0.5) * 0.35,
         face: nrm.clone(),
@@ -784,8 +806,11 @@ function emitScalp(ctx) {
     const front = clamp01(0.5 + 0.5 * Math.cos(phi));
 
     // Grow along the scalp's flow field, lifted off the surface by `outward`.
+    // The fringe gets less lift than the rest: a strand that leaves the
+    // hairline pointing away from the skull is a plank standing off the
+    // forehead, and a dozen of them is the row of planks the fringe read as.
     const d0 = flowDir(ctx, nrm, clamp01(style.flow), new THREE.Vector3());
-    d0.addScaledVector(nrm, style.outward * (0.6 + 0.4 * volume) + 0.12);
+    d0.addScaledVector(nrm, (style.outward * (0.6 + 0.4 * volume) + 0.08) * (1 - 0.55 * front));
     // Centre part: the fringe is pushed off the face to either side.
     const side = Math.sin(phi) >= 0 ? 1 : -1;
     d0.addScaledVector(right, side * style.part * front * (0.7 + rng() * 0.6));
@@ -823,11 +848,14 @@ function emitScalp(ctx) {
 
     const P = {
       length: len,
-      segs: style.segs,
-      gravity: style.gravity * profile.gravity,
+      // A short strand cut into as many cards as a long one gives cards that
+      // are wider than they are tall, i.e. lozenges. Keep the fringe on fewer,
+      // longer links; `assemble` also caps the aspect as a backstop.
+      segs: Math.max(2, Math.round(style.segs * lerp(1.0, 0.62, front))),
+      gravity: style.gravity * profile.gravity * (1 + 0.45 * front),
       stiff: style.stiff,
-      noise: style.noise * profile.noise * 0.35,
-      curl: style.curl,
+      noise: style.noise * profile.noise * 0.35 * (1 + 0.9 * front),
+      curl: style.curl + 0.05 * front,
       curlFreq: 1.1 + rng() * 0.8,
       curlAxis: right.clone().multiplyScalar(Math.sin(phi) >= 0 ? 1 : -1),
       drift: driftVec,
@@ -841,13 +869,87 @@ function emitScalp(ctx) {
 
     const pts = growStrand(rng, root, d0, P);
     pushStrand(ctx, pts, {
-      width: strandWidth(ctx, 0.85 + rng() * 0.45),
-      tint: tintFor(ctx),
+      // Narrower over the forehead, where the mass has to break into separate
+      // hanging locks rather than tile the brow with slabs.
+      width: strandWidth(ctx, (0.85 + rng() * 0.45) * lerp(1.0, 0.66, front)),
+      // The mid layer, sitting between the dark cap and the light flyaways.
+      tint: clamp01(0.30 + tintFor(ctx) * 0.62),
       seed: rng(),
       twist: (rng() - 0.5) * 0.5,
       face: nrm.clone(),
       axis: { origin: center, up },
       priority: 1
+    });
+  }
+}
+
+/**
+ * Outer wisp layer — short, thin, numerous cards lying over the top of the
+ * mass.
+ *
+ * Two jobs, both about the silhouette. The mass is built from a few dozen wide
+ * locks, and a few dozen wide locks end in a few dozen wide points: the outline
+ * comes out as a row of triangles, which reads as broken geometry rather than
+ * as hair. These are narrow enough to read as single hairs at the edge and
+ * dense enough to fill in between the locks' outlines.
+ *
+ * They are also the layer that catches the rim. They carry the top of the tint
+ * range, so the material's value ramp lands its lightest hair here, on the
+ * outside of the mass where light actually reaches — which is the difference
+ * between a lit head of hair and a flat dark helmet.
+ */
+function emitFlyaway(ctx) {
+  const { style, profile, rng, R } = ctx;
+  const n = Math.round(58 * clamp(profile.density, 0.5, 1.35) * (style.shaved ? 0.45 : 1));
+  if (n <= 0) return;
+
+  const dir = new THREE.Vector3();
+  const nrm = new THREE.Vector3();
+  const root = new THREE.Vector3();
+  const flow = new THREE.Vector3();
+  const side = new THREE.Vector3();
+
+  for (let i = 0; i < n; i++) {
+    const u = (i + 0.5) / n;
+    const theta = Math.acos(1 - u * (1 - Math.cos(2.05))) + (rng() - 0.5) * 0.20;
+    const phi = i * 2.399963 + rng() * 0.7;
+    if (theta < 0 || !acceptRoot(ctx, theta, phi, (rng() - 0.5) * 0.2)) continue;
+
+    domePoint(ctx.frame, theta, phi, dir);
+    domeNormal(ctx.frame, dir, nrm);
+    // Rooted out at the surface of the mass, not on the scalp.
+    rootAt(ctx, dir, 1.03 + rng() * 0.07, root);
+
+    const front = clamp01(0.5 + 0.5 * Math.cos(phi));
+    flowDir(ctx, nrm, clamp01(style.flow), flow);
+    side.crossVectors(nrm, flow);
+    const a = (rng() - 0.5) * 0.9;
+    const d0 = flow.clone().multiplyScalar(Math.cos(a)).addScaledVector(side, Math.sin(a));
+    d0.addScaledVector(nrm, 0.16 + rng() * 0.14);
+
+    const pts = growStrand(rng, root, d0, {
+      length: R * lerp(0.95, 0.55, front) * profile.length * (0.6 + rng() * 0.8),
+      segs: 2,
+      gravity: (0.5 + 0.3 * front) * profile.gravity,
+      stiff: 0.34,
+      noise: 0.12 * profile.noise,
+      curl: 0.05,
+      curlFreq: 1.5,
+      curlAxis: ctx.right.clone(),
+      skull: skullOf(ctx, 1.02),
+      up: ctx.up
+    });
+    pushStrand(ctx, pts, {
+      // Thin: these are meant to read as a handful of hairs, not as a lock.
+      width: strandWidth(ctx, 0.34 + rng() * 0.22),
+      tint: clamp01(0.66 + rng() * 0.34),
+      seed: rng(),
+      twist: (rng() - 0.5) * 0.9,
+      face: nrm.clone(),
+      axis: { origin: ctx.center, up: ctx.up },
+      // Above the scalp field, below the sculpted features: if anything has to
+      // be dropped for budget it should be a lock, not the whole outer layer.
+      priority: 1.5
     });
   }
 }
@@ -1563,8 +1665,16 @@ function assemble(strands, material, raceName, styleId) {
         xAxis.set(nx, ny, nz);
       }
 
-      xAxis.multiplyScalar(width);
-      zAxis.multiplyScalar(width);
+      // NO LOZENGES. A card wider than it is long is not a piece of hair, it is
+      // a shard: the taper makes it a triangle, and the eye reads the triangle
+      // long before it reads the hairs painted on it. It happens wherever a
+      // short strand is cut into the same number of links as a long one — the
+      // fringe most of all, which is why the fringe read as a row of stiff
+      // planks. Cap the width against this card's own length so the ribbon
+      // stays a ribbon everywhere, whatever the style table asks for.
+      const drawW = Math.min(width, len * MAX_CARD_ASPECT);
+      xAxis.multiplyScalar(drawW);
+      zAxis.multiplyScalar(drawW);
       yAxis.copy(tangent).multiplyScalar(len);
 
       m.makeBasis(xAxis, yAxis, zAxis);
@@ -1600,7 +1710,11 @@ function assemble(strands, material, raceName, styleId) {
 
   mesh.name = 'hair-' + styleId;
   mesh.castShadow = true;
-  mesh.receiveShadow = false;
+  // Hair receiving its own shadow is most of what "depth into the mass" is: the
+  // key is the rig's only caster, so with this off every layer of the hair was
+  // lit as if it were the outermost one and the whole mass flattened to a
+  // single value no matter how much per-strand variation was in the material.
+  mesh.receiveShadow = true;
   mesh.frustumCulled = true;
   mesh.computeBoundingSphere();
   mesh.userData.hair = {

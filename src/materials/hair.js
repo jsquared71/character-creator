@@ -48,22 +48,39 @@ const DEFAULT_RACE = 'Human';
 // Per-race strand character. `strands` is how many hairs the card texture
 // draws across one quad; `wave` how much they wander; `stretch` how elongated
 // the fibre noise is along the strand; `shine` scales both specular lobes.
+//
+// `strands` is NOT free to raise. The card map is minified hard on screen (a
+// 256-wide map across a 40-80 px card), so a fibre and the gap beside it have
+// to be several *texels* wide or the mip chain averages them into one flat
+// value — see CARD_FRAG. Ten fibres across a card is about the ceiling at the
+// card widths character/hair.js now uses.
 const PROFILES = {
-  Human:       { strands: 13,  thick: 1.00, wave: 0.030, detail: 26, stretch: 9.0,  shine: 1.00, spread: 0.55, rootRough: 0.80, tipRough: 0.33, exp1: 90,  exp2: 26, shiftNoise: 0.055, rootDark: 0.60 },
-  Dwarf:       { strands: 10,  thick: 1.30, wave: 0.055, detail: 18, stretch: 6.5,  shine: 0.80, spread: 0.62, rootRough: 0.88, tipRough: 0.45, exp1: 55,  exp2: 18, shiftNoise: 0.080, rootDark: 0.62 },
-  'Night Elf': { strands: 16, thick: 0.80, wave: 0.020, detail: 34, stretch: 14.0, shine: 1.35, spread: 0.48, rootRough: 0.70, tipRough: 0.22, exp1: 140, exp2: 34, shiftNoise: 0.035, rootDark: 0.52 },
-  Gnome:       { strands: 13, thick: 0.95, wave: 0.065, detail: 24, stretch: 7.5,  shine: 1.15, spread: 0.70, rootRough: 0.76, tipRough: 0.28, exp1: 100, exp2: 24, shiftNoise: 0.070, rootDark: 0.55 },
-  Draenei:     { strands: 14, thick: 0.90, wave: 0.028, detail: 30, stretch: 12.0, shine: 1.25, spread: 0.50, rootRough: 0.72, tipRough: 0.24, exp1: 120, exp2: 30, shiftNoise: 0.040, rootDark: 0.54 },
-  Worgen:      { strands: 17, thick: 0.75, wave: 0.045, detail: 16, stretch: 5.0,  shine: 0.55, spread: 0.80, rootRough: 0.92, tipRough: 0.58, exp1: 40,  exp2: 14, shiftNoise: 0.110, rootDark: 0.68 },
-  Pandaren:    { strands: 17, thick: 0.85, wave: 0.038, detail: 14, stretch: 4.5,  shine: 0.50, spread: 0.78, rootRough: 0.94, tipRough: 0.62, exp1: 34,  exp2: 12, shiftNoise: 0.120, rootDark: 0.66 },
-  Orc:         { strands: 11,  thick: 1.20, wave: 0.042, detail: 20, stretch: 7.0,  shine: 0.72, spread: 0.60, rootRough: 0.88, tipRough: 0.44, exp1: 52,  exp2: 17, shiftNoise: 0.085, rootDark: 0.66 },
-  Undead:      { strands: 9,  thick: 1.10, wave: 0.075, detail: 12, stretch: 5.5,  shine: 0.38, spread: 0.85, rootRough: 0.96, tipRough: 0.70, exp1: 26,  exp2: 10, shiftNoise: 0.140, rootDark: 0.74 },
-  Tauren:      { strands: 13, thick: 1.35, wave: 0.035, detail: 17, stretch: 6.0,  shine: 0.68, spread: 0.66, rootRough: 0.90, tipRough: 0.46, exp1: 46,  exp2: 16, shiftNoise: 0.090, rootDark: 0.64 },
-  Troll:       { strands: 11,  thick: 1.15, wave: 0.085, detail: 15, stretch: 5.5,  shine: 0.62, spread: 0.72, rootRough: 0.92, tipRough: 0.50, exp1: 42,  exp2: 15, shiftNoise: 0.105, rootDark: 0.66 },
-  'Blood Elf': { strands: 16, thick: 0.82, wave: 0.022, detail: 32, stretch: 13.0, shine: 1.40, spread: 0.46, rootRough: 0.68, tipRough: 0.20, exp1: 145, exp2: 36, shiftNoise: 0.032, rootDark: 0.50 },
-  Goblin:      { strands: 11,  thick: 0.95, wave: 0.070, detail: 20, stretch: 6.5,  shine: 0.85, spread: 0.75, rootRough: 0.86, tipRough: 0.40, exp1: 60,  exp2: 20, shiftNoise: 0.095, rootDark: 0.60 },
-  Dracthyr:    { strands: 14, thick: 0.88, wave: 0.026, detail: 28, stretch: 11.0, shine: 1.20, spread: 0.52, rootRough: 0.74, tipRough: 0.26, exp1: 110, exp2: 28, shiftNoise: 0.045, rootDark: 0.56 }
+  Human:       { strands: 10, thick: 1.00, wave: 0.030, detail: 26, stretch: 9.0,  shine: 1.00, spread: 0.55, rootRough: 0.80, tipRough: 0.33, exp1: 90,  exp2: 26, shiftNoise: 0.055, rootDark: 0.60 },
+  Dwarf:       { strands: 8,  thick: 1.22, wave: 0.055, detail: 18, stretch: 6.5,  shine: 0.80, spread: 0.62, rootRough: 0.88, tipRough: 0.45, exp1: 55,  exp2: 18, shiftNoise: 0.080, rootDark: 0.62 },
+  'Night Elf': { strands: 12, thick: 0.86, wave: 0.020, detail: 34, stretch: 14.0, shine: 1.35, spread: 0.48, rootRough: 0.70, tipRough: 0.22, exp1: 140, exp2: 34, shiftNoise: 0.035, rootDark: 0.52 },
+  Gnome:       { strands: 10, thick: 0.95, wave: 0.065, detail: 24, stretch: 7.5,  shine: 1.15, spread: 0.70, rootRough: 0.76, tipRough: 0.28, exp1: 100, exp2: 24, shiftNoise: 0.070, rootDark: 0.55 },
+  Draenei:     { strands: 11, thick: 0.92, wave: 0.028, detail: 30, stretch: 12.0, shine: 1.25, spread: 0.50, rootRough: 0.72, tipRough: 0.24, exp1: 120, exp2: 30, shiftNoise: 0.040, rootDark: 0.54 },
+  Worgen:      { strands: 12, thick: 0.82, wave: 0.045, detail: 16, stretch: 5.0,  shine: 0.55, spread: 0.80, rootRough: 0.92, tipRough: 0.58, exp1: 40,  exp2: 14, shiftNoise: 0.110, rootDark: 0.68 },
+  Pandaren:    { strands: 12, thick: 0.90, wave: 0.038, detail: 14, stretch: 4.5,  shine: 0.50, spread: 0.78, rootRough: 0.94, tipRough: 0.62, exp1: 34,  exp2: 12, shiftNoise: 0.120, rootDark: 0.66 },
+  Orc:         { strands: 9,  thick: 1.16, wave: 0.042, detail: 20, stretch: 7.0,  shine: 0.72, spread: 0.60, rootRough: 0.88, tipRough: 0.44, exp1: 52,  exp2: 17, shiftNoise: 0.085, rootDark: 0.66 },
+  Undead:      { strands: 7,  thick: 1.05, wave: 0.075, detail: 12, stretch: 5.5,  shine: 0.38, spread: 0.85, rootRough: 0.96, tipRough: 0.70, exp1: 26,  exp2: 10, shiftNoise: 0.140, rootDark: 0.74 },
+  Tauren:      { strands: 10, thick: 1.28, wave: 0.035, detail: 17, stretch: 6.0,  shine: 0.68, spread: 0.66, rootRough: 0.90, tipRough: 0.46, exp1: 46,  exp2: 16, shiftNoise: 0.090, rootDark: 0.64 },
+  Troll:       { strands: 9,  thick: 1.12, wave: 0.085, detail: 15, stretch: 5.5,  shine: 0.62, spread: 0.72, rootRough: 0.92, tipRough: 0.50, exp1: 42,  exp2: 15, shiftNoise: 0.105, rootDark: 0.66 },
+  'Blood Elf': { strands: 12, thick: 0.88, wave: 0.022, detail: 32, stretch: 13.0, shine: 1.40, spread: 0.46, rootRough: 0.68, tipRough: 0.20, exp1: 145, exp2: 36, shiftNoise: 0.032, rootDark: 0.50 },
+  Goblin:      { strands: 9,  thick: 0.98, wave: 0.070, detail: 20, stretch: 6.5,  shine: 0.85, spread: 0.75, rootRough: 0.86, tipRough: 0.40, exp1: 60,  exp2: 20, shiftNoise: 0.095, rootDark: 0.60 },
+  Dracthyr:    { strands: 11, thick: 0.90, wave: 0.026, detail: 28, stretch: 11.0, shine: 1.20, spread: 0.52, rootRough: 0.74, tipRough: 0.26, exp1: 110, exp2: 28, shiftNoise: 0.045, rootDark: 0.56 }
 };
+
+// Fraction of the card's width, on each side, that carries no fibre at all.
+// The painted hairs stop short of the ribbon's geometric edge by this much and
+// the alpha is then ramped to zero across it, so the card dissolves into
+// strands instead of ending on a cut line. Cards in character/hair.js are
+// widened to pay for it.
+const CARD_INSET = 0.16;
+// The card map's dimensions, needed in the fragment shader to work out how many
+// texels the mip filter is averaging under one pixel.
+const CARD_W = 256;
+const CARD_H = 512;
 
 const DEFAULT_PROFILE = PROFILES.Human;
 
@@ -106,9 +123,34 @@ function clamp01(x) {
 // between them. So: the strands here run the full height at constant gauge and
 // wander by a whole number of cycles, and all the root-to-tip behaviour is done
 // in the fragment shader from aStrandSpan, which knows about the whole strand.
+// THE GAP BETWEEN TWO FIBRES HAS TO SURVIVE THE MIP FILTER. This is the whole
+// reason the hair used to read as opaque triangular shards rather than as hair,
+// and it is not visible by looking at the baked map — only at what the mip
+// chain does to it on screen.
+//
+// The map is 256 texels across and a card is roughly 40-80 px wide at face
+// framing, so the sampler is averaging four to six texels under every pixel.
+// Round 2 painted fibres that covered ~75% of their slot (a 13-texel hair with
+// a 5-texel gap beside it) and then dropped alphaTest to 0.15 to soften the
+// edges. Both moves push the same way: the blurred gap never falls below the
+// threshold, so the cutout keeps every pixel of the card, the painted strands
+// stop existing, and what draws is the bare tapered polygon — a hard-edged
+// dark shard. The cutout was faithfully reproducing the geometry because there
+// was no longer any alpha detail left for it to cut.
+//
+// So the fibres are deliberately *thin* relative to their slot (about half of
+// it), leaving a gap wide enough that its centre is still near zero after the
+// filter, and the threshold sits above the blurred-gap value instead of under
+// it. FRAG_ALPHA then compensates at real minification, where the fibres
+// genuinely cannot be resolved and hair should merge into a mass anyway.
 const CARD_FRAG = /* glsl */ `
   float u = clamp(vUv.x, 0.0, 1.0);
   float v = vUv.y;
+
+  // Fibres live in the middle of the card only; uInset of the width on each
+  // side is left bare so the alpha can ramp to zero well inside the geometric
+  // edge on both long sides.
+  float span = 1.0 - 2.0 * uInset;
 
   float alpha = 0.0;
   float core = 0.0;
@@ -125,30 +167,35 @@ const CARD_FRAG = /* glsl */ `
 
     // Strand centre: evenly slotted, jittered, then wandering along its length.
     // The wander is a whole number of cycles so V = 1 lines up with V = 0.
-    float slot = (fi + 0.5) / uCount;
+    // The jitter is small: at a third of a slot two neighbours can merge, and a
+    // merged pair is a wide opaque band, which is the shard again in miniature.
+    float slot = uInset + (fi + 0.5) / uCount * span;
     float turns = 1.0 + floor(r2 * 2.99);
     float wander = sin((v * turns + r3) * 6.2831853) * uWave;
-    float cx = slot + (r1 - 0.5) * (0.9 / uCount) + wander;
+    float cx = slot + (r1 - 0.5) * (0.26 * span / uCount) + wander;
 
-    float w = (0.5 / uCount) * mix(0.42, 0.94, r3) * uThick;
+    // Half-width, as a fraction of the slot. 1.15 * w is where the fibre
+    // reaches zero, so at w = 0.22 slots a fibre spans about half its slot and
+    // the other half stays open.
+    float w = (span / uCount) * mix(0.17, 0.27, r3) * uThick;
 
     float d = abs(u - cx);
-    // Wide feathered shoulders. The cutout is a hard alpha test, so the only
-    // thing that makes an edge look soft is the width of this ramp relative to
-    // a pixel: a narrow ramp gives cut-paper edges no matter what the
-    // threshold is.
-    float a = 1.0 - smoothstep(w * 0.30, w * 1.10, d);
+    // Feathered shoulders: solid core, then a ramp about three times as wide as
+    // the core. The cutout is a hard test, so the only thing that makes an edge
+    // look soft is the width of this ramp relative to a pixel.
+    float a = 1.0 - smoothstep(w * 0.28, w * 1.15, d);
 
     // Fine break-up along the strand so it is not a clean airbrushed line.
-    // Sampled on a circle in V so it, too, tiles from card to card.
+    // Sampled on a circle in V so it, too, tiles from card to card. It may not
+    // pull the core below the cutout, or the fibre breaks into dashes.
     float grain = fbm(vec3(
       cos(v * 6.2831853) * 0.5 * uDetail,
       sin(v * 6.2831853) * 0.5 * uDetail,
       fi * 7.0 + uSeed * 13.0), 3, 2.0, 0.5);
-    a *= clamp(0.55 + 0.72 * (grain * 0.5 + 0.5), 0.0, 1.15);
+    a *= clamp(0.78 + 0.55 * (grain * 0.5 + 0.5), 0.0, 1.10);
 
     a = clamp(a, 0.0, 1.0);
-    float c = clamp(1.0 - smoothstep(0.0, w * 0.55, d), 0.0, 1.0);
+    float c = clamp(1.0 - smoothstep(0.0, w * 0.60, d), 0.0, 1.0);
 
     if (a > alpha) sid = r1;
     alpha = max(alpha, a);
@@ -156,9 +203,13 @@ const CARD_FRAG = /* glsl */ `
   }
 
   // Soft borders on BOTH card edges. The geometry mirrors U over the ribbon's
-  // cross-section so u = 0 and u = 1 are the two long edges of the card.
-  alpha *= smoothstep(0.0, 0.05, u) * (1.0 - smoothstep(0.95, 1.0, u));
-  alpha = clamp(alpha, 0.0, 1.0);
+  // cross-section so u = 0 and u = 1 are the two long edges of the card. The
+  // ramp is as wide as the bare inset, which is 25-30 px of card at face
+  // framing rather than the 2 px the old 0.05 border gave.
+  float border = smoothstep(0.0, uInset * 0.92, u)
+               * (1.0 - smoothstep(1.0 - uInset * 0.92, 1.0, u));
+  alpha = clamp(alpha * border, 0.0, 1.0);
+  core *= border;
 
   gl_FragColor = vec4(core, alpha, sid, alpha);
 `;
@@ -230,10 +281,12 @@ uniform vec3 uHairTintHi;
 uniform vec3 uHairRootColor;
 uniform vec3 uHairSpecPrimary;
 uniform vec3 uHairSpecSecondary;
+uniform vec3 uHairScatter;
 uniform vec4 uHairSpecA;   // x intensity, y exponent, z shift, w shift-noise
-uniform vec4 uHairSpecB;   // x intensity, y exponent, z shift, w diffuse wrap
+uniform vec4 uHairSpecB;   // x intensity, y exponent, z shift, w back-lit wrap
 uniform vec4 uHairShape;   // x root darkening, y tint spread, z root rough, w tip rough
-uniform vec2 uHairEdge;    // x tip softness, y dither amount
+uniform vec4 uHairEdge;    // x tip softness, y dither amount, z minification fill, w unused
+uniform vec3 uHairScatterK; // x strength, y forward exponent, z tip bias
 uniform vec2 uHairMisc;    // x fibre scale, y flip V
 uniform float uHairTime;
 
@@ -248,6 +301,7 @@ vec3 gHairTangent;
 float gHairShift;
 float gHairSpecMask;
 float gHairBreak;
+float gHairScatterMask;
 
 float hairHash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -300,8 +354,15 @@ void RE_Direct_Hair( const in IncidentLight directLight, const in vec3 geometryP
   vec3 V = geometryViewDir;
 
   // Cards are near-flat, so a hard N.L cutoff strobes as they turn. Wrap it.
+  //
+  // The wrap used to be squared, which is very nearly a cosine term — and a
+  // cosine term is exactly wrong for the light that matters most here. The rim
+  // is a spot almost directly behind the subject, so on every card at the
+  // silhouette N.L is negative and a squared wrap left it at ~6% of the lobe.
+  // The rig's best hair light was being multiplied out of existence. A real
+  // fibre scatters around its whole circumference; keep a floor.
   float wrapNL = saturate(dot(N, L) * 0.5 + 0.5);
-  float atten = wrapNL * wrapNL;
+  float atten = mix(0.55, 1.0, wrapNL);
 
   float s1 = hairKKLobe(T, N, L, V, uHairSpecA.z + gHairShift, uHairSpecA.y);
   float s2 = hairKKLobe(T, N, L, V, uHairSpecB.z + gHairShift * 1.8, uHairSpecB.y);
@@ -313,8 +374,29 @@ void RE_Direct_Hair( const in IncidentLight directLight, const in vec3 geometryP
   vec3 spec = uHairSpecPrimary * (s1 * uHairSpecA.x) + uHairSpecSecondary * (s2 * uHairSpecB.x);
   reflectedLight.directSpecular += directLight.color * spec * atten * gHairSpecMask;
 
-  // A little forward scatter through the hair mass so back-lit strands are
-  // not pure silhouette.
+  // TRANSMISSION. Light that entered the far side of the hair mass and came out
+  // toward the camera. This is what makes back-lit hair glow instead of reading
+  // as a black cutout, and it is the term the rim spot drives.
+  //
+  // It must NOT be tinted by material.diffuseColor: the default Human hair is
+  // #20150f, so multiplying by the albedo is multiplying by zero and the whole
+  // effect vanished on exactly the hair that needed it most. uHairScatter is a
+  // deliberately lifted, saturated version of the hair colour — the colour you
+  // see looking *through* hair, not at it.
+  //
+  // dot(V, L) is -1 when the light sits directly behind the subject (L points
+  // away from camera), so the forward lobe is built on -dot(V, L). Front lights
+  // contribute nothing here, which is what keeps this from flattening the key.
+  float forward = saturate(-dot(V, L));
+  float tt = pow(forward, uHairScatterK.y);
+  // Grazing cards are thin to look through; ones facing the camera are thick.
+  float thin = 1.0 - abs(dot(N, V));
+  tt *= mix(0.45, 1.0, thin * thin);
+  reflectedLight.directDiffuse +=
+    directLight.color * uHairScatter * (tt * uHairScatterK.x * gHairScatterMask);
+
+  // A shallow wrap on the ordinary diffuse so the terminator across a lock is
+  // soft rather than a hard band at every card.
   float wrapDiffuse = saturate((dot(N, L) + 0.4) / 1.4) - saturate(dot(N, L));
   reflectedLight.directDiffuse += directLight.color * material.diffuseColor * (wrapDiffuse * uHairSpecB.w);
 }
@@ -359,7 +441,15 @@ const FRAG_COLOR = /* glsl */ `
   // Root-to-tip: dark and dense at the scalp, lifting toward the ends.
   float hairRoot = 1.0 - smoothstep(0.0, 0.36, hairT);
   hairAlbedo = mix(hairAlbedo, uHairRootColor, hairRoot * uHairShape.x);
-  hairAlbedo *= mix(1.0, 1.22, smoothstep(0.30, 1.0, hairT));
+  hairAlbedo *= mix(1.0, 1.28, smoothstep(0.22, 1.0, hairT));
+
+  // LAYER SEPARATION. A head of hair is not one value; it is an outer layer
+  // catching the light with darker layers behind it. aStrandTint carries which
+  // layer a card belongs to (character/hair.js tints the under-cap dark and the
+  // outer flyaways light), so give it a straight multiplicative say in the
+  // value as well as a say in the hue mix. Without this the mass renders as a
+  // single flat tone no matter how much per-fibre noise is in the maps.
+  hairAlbedo *= mix(0.58, 1.24, hairStrand);
 
   diffuseColor.rgb = hairAlbedo;
 `;
@@ -379,6 +469,21 @@ const FRAG_ALPHA = /* glsl */ `
   // multisampled target alphaToCoverage turns the same band into real coverage.
   diffuseColor.a *= mix(0.90, 1.10, hairMicro);
 
+  // HOW MUCH OF THE CARD MAP THE MIP CHAIN HAS ALREADY THROWN AWAY. A card is
+  // ~60 px across when it is a main lock at face framing and ~15 px when it is
+  // a fringe lock or anything at hero framing, against a 256-texel map: past a
+  // few texels per pixel the painted fibres do not exist any more, whatever the
+  // threshold does.
+  vec2 hairTexel = fwidth(vHairUv) * vec2(${CARD_W}.0, ${CARD_H}.0);
+  float hairLod = log2(max(max(hairTexel.x, hairTexel.y), 1.0));
+  float hairMinif = clamp((hairLod - 1.4) / 2.4, 0.0, 1.0);
+  // A small lift so a minified lock does not simply thin out to nothing — but
+  // only a small one. Pushing the whole card back to solid here is what turned
+  // every narrow fringe card into a flat grey slab with two perfectly straight
+  // edges: the alpha detail was gone and the fill handed the cutout the bare
+  // polygon again, one level up from the bug this whole pass is about.
+  diffuseColor.a *= 1.0 + uHairEdge.z * hairMinif;
+
   // Tip fray, over the whole strand. Each fibre in the card runs out at its own
   // height, so a lock ends in a spray of points rather than a chopped band —
   // and because this is driven by aStrandSpan it happens once, at the real tip,
@@ -386,9 +491,22 @@ const FRAG_ALPHA = /* glsl */ `
   float hairEnd = mix(1.0 - uHairEdge.x * 2.2, 1.0, hairSid);
   diffuseColor.a *= 1.0 - smoothstep(hairEnd - uHairEdge.x, hairEnd, hairT);
 
+  // HASHED ALPHA TEST. Where the fibres still resolve, this is a hard cutout
+  // with a pixel of dither around the edge for SMAA to chew on. Where they do
+  // not, the threshold is randomised across the whole range instead, so a card
+  // carrying 30% average coverage draws 30% of its pixels rather than all of
+  // them or none of them. That is the only way a sub-fibre-width card can read
+  // as "some hair here" without either vanishing or turning into a plank, and
+  // it is what keeps a lock translucent at the fringe and at hero framing.
+  //
+  // The offset is what makes it unbiased: with amplitude A the fragment passes
+  // when a > alphaTest + (1 - alphaTest - dither) * A, which at A = 1 is
+  // exactly 'a > 1 - dither', i.e. it survives with probability a.
   float hairDither = hairHash21(gl_FragCoord.xy) * 0.5
                    + hairHash21(gl_FragCoord.yx * 1.37 + vec2(fract(hairSeed * 71.3))) * 0.5;
-  diffuseColor.a = clamp(diffuseColor.a + (hairDither - 0.5) * uHairEdge.y, 0.0, 1.0);
+  float hairHashAmt = mix(uHairEdge.y, 0.92, hairMinif);
+  diffuseColor.a = clamp(
+    diffuseColor.a + (hairDither - 1.0 + alphaTest) * hairHashAmt, 0.0, 1.0);
 `;
 
 const FRAG_PRELIGHT = /* glsl */ `
@@ -404,6 +522,11 @@ const FRAG_PRELIGHT = /* glsl */ `
                 // Keep the sheen on the fibre cores; the feathered shoulders of
                 // a strand are what should read soft.
                 * mix(0.35, 1.10, hairCore);
+  // Transmission is a property of the whole lock, not of one fibre: it is
+  // strongest at the thin, loose ends and weakest where the mass is dense at
+  // the scalp.
+  gHairScatterMask = mix(0.25, 1.0, smoothstep(0.0, uHairScatterK.z, hairT))
+                   * mix(0.75, 1.25, hairStrand);
 `;
 
 // ---------------------------------------------------------------------------
@@ -425,10 +548,12 @@ export function createHairMaterial(ctx, params = {}) {
     uHairRootColor: { value: new THREE.Color(0x140d08) },
     uHairSpecPrimary: { value: new THREE.Color(0xffffff) },
     uHairSpecSecondary: { value: new THREE.Color(0x8a5a2b) },
+    uHairScatter: { value: new THREE.Color(0xb07a44) },
     uHairSpecA: { value: new THREE.Vector4(0.34, 90.0, -0.045, 0.055) },
     uHairSpecB: { value: new THREE.Vector4(0.22, 26.0, 0.065, 0.16) },
     uHairShape: { value: new THREE.Vector4(0.6, 0.55, 0.8, 0.33) },
-    uHairEdge: { value: new THREE.Vector2(0.16, 0.13) },
+    uHairEdge: { value: new THREE.Vector4(0.16, 0.13, 0.16, 0.0) },
+    uHairScatterK: { value: new THREE.Vector3(0.09, 3.0, 0.55) },
     uHairMisc: { value: new THREE.Vector2(5.5, 0.0) },
     uHairTime: { value: 0 }
   };
@@ -446,12 +571,15 @@ export function createHairMaterial(ctx, params = {}) {
     shadowSide: THREE.DoubleSide,
     transparent: false,
     depthWrite: true,
-    // Low. The composer's targets are single-sampled, so alphaToCoverage never
-    // actually engages here and this is a plain binary cutout: whatever the
-    // threshold clips is simply gone. At 0.32, with the card map's feathered
-    // strand shoulders, roughly the outer third of every fibre was being
-    // clipped away, which is what turned soft locks into hard splinters.
-    alphaTest: 0.15,
+    // This has to sit ABOVE the value a blurred inter-fibre gap reaches, not
+    // below it. The composer's targets are single-sampled so alphaToCoverage
+    // never engages and this is a plain binary cutout; round 2 dropped it to
+    // 0.15 reasoning that a low threshold clips less of the feathered fibre,
+    // which is true in isolation and wrong on screen — at 0.15 the mip-blurred
+    // gaps also survive, the card fills in solid and the cutout returns the
+    // bare polygon. CARD_FRAG now leaves gaps that blur to well under this and
+    // fibre cores that stay well over it.
+    alphaTest: 0.34,
     alphaToCoverage: true,
     dithering: true,
     flatShading: false
@@ -485,7 +613,7 @@ export function createHairMaterial(ctx, params = {}) {
 
   // Without this the program cache could hand this material a program compiled
   // for a plain MeshPhysicalMaterial with identical parameters.
-  material.customProgramCacheKey = () => 'hair-kajiya-kay-v1';
+  material.customProgramCacheKey = () => 'hair-kajiya-kay-v2';
 
   const state = { color: null, race: null, cardKey: null, fibreKey: null };
 
@@ -500,8 +628,8 @@ export function createHairMaterial(ctx, params = {}) {
     if (key === state.cardKey && material.alphaMap) return material.alphaMap;
     const seed = hashSeed(`${race}|${colorHex}`);
     const tex = bakery.bake(key, CARD_FRAG, {
-      width: 256,
-      height: 512,
+      width: CARD_W,
+      height: CARD_H,
       wrap: THREE.ClampToEdgeWrapping,
       colorSpace: THREE.NoColorSpace,
       uniforms: {
@@ -509,6 +637,7 @@ export function createHairMaterial(ctx, params = {}) {
         uThick: p.thick,
         uWave: p.wave,
         uDetail: p.detail,
+        uInset: CARD_INSET,
         uSeed: seed
       }
     });
@@ -558,27 +687,35 @@ export function createHairMaterial(ctx, params = {}) {
     // tint variation that is supposed to read as separate strands lands below
     // the point where the tone mapper can resolve it. Lift the whole ramp so
     // the internal structure survives, and let the KK lobes do the rest.
-    const floorLo = 0.058 * (1 - clamp01(l * 3.0));
-    const floorHi = 0.135 * (1 - clamp01(l * 2.4));
+    const floorLo = 0.040 * (1 - clamp01(l * 3.0));
+    const floorHi = 0.105 * (1 - clamp01(l * 2.4));
 
     material.color.copy(tmpBase);
 
+    // The light end of the ramp is built by walking *toward white* rather than
+    // by scaling the lightness. Scaling gives near-black hair a highlight that
+    // is still near-black (0.09 x 1.17 is 0.10 — no separation at all, which is
+    // why the mass read as one dark value) and simultaneously blows out pale
+    // hair, where the same multiplier clips. Walking a fixed fraction of the
+    // remaining headroom gives every colour the same *contrast*, which is the
+    // thing that reads as depth.
+    const lift = 0.24 + 0.14 * p.spread;
     uniforms.uHairTintLo.value.setHSL(
       clamp01(h - 0.008),
       clamp01(s * 1.10),
-      clamp01(l * (0.66 - spread * 0.22) + floorLo),
+      clamp01(l * (0.52 - spread * 0.22) + floorLo),
       THREE.SRGBColorSpace
     );
     uniforms.uHairTintHi.value.setHSL(
       clamp01(h + 0.010),
       clamp01(s * (0.80 - pale * 0.2)),
-      clamp01(l * (1.0 + spread) + 0.05 * (1.0 - pale) + floorHi),
+      clamp01(l + (1 - l) * lift + floorHi * (1 - pale)),
       THREE.SRGBColorSpace
     );
     uniforms.uHairRootColor.value.setHSL(
       clamp01(h - 0.004),
       clamp01(s * 1.15),
-      clamp01(l * 0.46 + floorLo * 0.5),
+      clamp01(l * 0.38 + floorLo * 0.5),
       THREE.SRGBColorSpace
     );
 
@@ -590,10 +727,23 @@ export function createHairMaterial(ctx, params = {}) {
       THREE.SRGBColorSpace
     );
     // Secondary lobe: saturated hair colour, this is what sells it as hair.
+    // Same headroom rule as the tint ramp — l * 1.25 on near-black hair is a
+    // "highlight" nobody can see.
     uniforms.uHairSpecSecondary.value.setHSL(
       clamp01(h + 0.012),
       clamp01(s * 1.30 + 0.10),
-      clamp01(l * 1.25 + 0.10),
+      clamp01(l + (1 - l) * 0.34),
+      THREE.SRGBColorSpace
+    );
+    // Transmission colour: what the rim spot makes of the hair when it is
+    // behind it. Light that has been through a hair fibre comes out warm and
+    // saturated and much lighter than the fibre looks in reflection, so this is
+    // pushed toward red/orange and lifted hard. It never multiplies the albedo,
+    // so black hair still gets a visible rim.
+    uniforms.uHairScatter.value.setHSL(
+      clamp01(h - 0.020),
+      clamp01(s * 1.15 + 0.16),
+      clamp01(l + (1 - l) * 0.62),
       THREE.SRGBColorSpace
     );
   }
@@ -606,10 +756,17 @@ export function createHairMaterial(ctx, params = {}) {
     uniforms.uHairSpecA.value.set(0.42 * shine, p.exp1, -0.045, p.shiftNoise);
     uniforms.uHairSpecB.value.set(0.34 * shine, p.exp2, 0.070, 0.22);
     uniforms.uHairShape.value.set(p.rootDark, p.spread, p.rootRough, p.tipRough);
-    // x: tip fray band, y: dither amplitude. The dither only has to be wide
-    // enough to stipple the one-pixel band around the cutout so SMAA can blend
-    // it; wider than that and the hair itself turns to salt and pepper.
-    uniforms.uHairEdge.value.set(0.16, 0.13);
+    // x: tip fray band. y: dither amplitude — only wide enough to stipple the
+    // one-pixel band around the cutout so SMAA can blend it; wider than that
+    // and the hair itself turns to salt and pepper. z: how hard the alpha is
+    // pushed back toward solid once the card map is being minified past the
+    // point where its fibres can resolve (see FRAG_ALPHA).
+    uniforms.uHairEdge.value.set(0.16, 0.15, 0.16, 0.0);
+    // x: transmission strength. The rim spot delivers roughly 4 units of
+    // irradiance at the head, so this is small by design — it is a glow at the
+    // silhouette, not a second key. y: forward-lobe exponent. z: how far up the
+    // strand the mass has to open out before it transmits.
+    uniforms.uHairScatterK.value.set(0.085 * (1.35 - 0.5 * clamp01(l)), 3.0, 0.55);
     // x scales the fibre lookup along the strand. hairT now spans the WHOLE
     // lock rather than one card, so this has to carry the several cycles per
     // card the old per-card coordinate got for free.

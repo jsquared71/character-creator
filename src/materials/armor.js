@@ -80,31 +80,47 @@ const FLOW_TEX = 512;
 // is constant across every triangle and `dFdx` of it vanishes. Curvature alone
 // therefore never fires on plate, which is exactly the tier that most needs the
 // paint to rub off the high spots.
+//
+// `grime` scales how hard the runtime grime pass (recesses go dark and matte)
+// is allowed to bite. It is 1.0 on the soft tiers, which want it: a cloth
+// recess really is matte. On plate it is held well down, because there the
+// pass was applying itself to ~40% of the surface — the flow map's wear alpha
+// sits on its 0.10 floor over every planished dent and scratch — and a metal
+// that is matte over 40% of its area has stopped being a metal.
+//
+// A NOTE ON `base` / `bare`, since these were the main reason plate read as
+// unfired clay. For a metal, albedo is not a diffuse colour: it *is* F0, the
+// normal-incidence specular reflectance, and it is the only thing the surface
+// returns. Real ferrous metal sits near 0.56 linear. These used to be 0x7c838c
+// (0.20 linear) and 0x99a1ab (0.32) — "grey paint" values, which under any
+// lighting rig reflect a third of what steel reflects and therefore cannot
+// produce a metal's value range no matter how the lights are set.
 const TIER_ART = {
   plate: {
-    base: 0x7c838c,          // forged, slightly blued steel — not chrome
+    base: 0xa8afb9,          // forged, slightly blued steel: F0 ~0.43 linear
     dark: 0x1d2126,
-    bare: 0x99a1ab,          // exposed steel on the edges: brighter, not a mirror
+    bare: 0xc0c7d0,          // exposed steel on the edges: F0 ~0.56, not a mirror
     trimBake: 0xaeb4bd,
-    bareRough: 0.33,
+    bareRough: 0.34,
     bareMetal: 1.0,
     tintAmt: 0.78,
     normalScale: 1.30,
     aniso: 0.50,
     anisoExp: 24.0,
-    anisoGain: 0.55,
+    anisoGain: 0.20,
     edgeLo: 6.0,             // 1/m — curvature where wear starts (r ~ 17cm)
     edgeHi: 26.0,            // 1/m — curvature where wear is total (r ~ 4cm)
     aoIntensity: 0.9,
     threads: 0.0,
-    relief: 0.78,
+    relief: 0.86,
+    grime: 0.45,
     wearLo: -0.20,     // measured: plate ah spans -0.97..+0.07, mean -0.14
     wearHi: 0.00
   },
   mail: {
-    base: 0x6d747d,
+    base: 0x9aa2ad,          // F0 ~0.33: darker than plate, still a metal
     dark: 0x15181c,
-    bare: 0xa9b1bb,
+    bare: 0xc2c9d2,
     trimBake: 0xb9beca,
     bareRough: 0.30,
     bareMetal: 1.0,
@@ -112,12 +128,13 @@ const TIER_ART = {
     normalScale: 1.35,
     aniso: 0.42,
     anisoExp: 22.0,
-    anisoGain: 0.42,
+    anisoGain: 0.26,
     edgeLo: 7.0,
     edgeHi: 30.0,
     aoIntensity: 1.0,
     threads: 0.0,
     relief: 0.45,
+    grime: 0.75,
     wearLo: 0.10,      // measured: ring faces crest near +0.80
     wearHi: 0.65
   },
@@ -137,6 +154,7 @@ const TIER_ART = {
     edgeHi: 34.0,
     aoIntensity: 0.85,
     threads: 0.0,
+    grime: 1.0,
     relief: 0.34,
     wearLo: -0.02,     // measured: hide crests near +0.35, stitches above
     wearHi: 0.30
@@ -157,6 +175,7 @@ const TIER_ART = {
     edgeHi: 38.0,
     aoIntensity: 0.7,
     threads: 104.0,
+    grime: 1.0,
     relief: 0.22,
     wearLo: 0.30,      // measured: weave crowns crest near +1.0
     wearHi: 0.80
@@ -326,7 +345,12 @@ const S_GLSL = {
     // that happens to be liveried, so a tint covering most of the set just
     // turns the whole suit into painted board. The boundary gets a
     // mid-frequency nibble so it is not one airbrushed blob at silhouette scale.
-    float paint = smoothstep(0.38, 0.62, 0.5 + 0.5 * fbm(p * 3.0 + 5.0, 3, 2.0, 0.5));
+    // Measured: the old (0.38, 0.62) window put the mean of "paint" at ~0.5,
+    // i.e. the "minority" the comment claims was in fact half the suit, and
+    // with the metalness drop below that made the baked metalness map read
+    // min 0.09 / mean 0.55 / max 0.95 — a near-uniform spread over the whole
+    // range, so half the plate arrived at the shader as a dielectric.
+    float paint = smoothstep(0.44, 0.68, 0.5 + 0.5 * fbm(p * 3.0 + 5.0, 3, 2.0, 0.5));
     paint = clamp(paint + 0.30 * fbm(p * 20.0, 3, 2.2, 0.55), 0.0, 1.0);
 
     vec3 steel = uBase * (0.74 + 0.34 * grime);
@@ -342,7 +366,7 @@ const S_GLSL = {
     // Low value on purpose: at full value a warm class colour like Warrior's
     // #c79c6e is the exact albedo of sanded pine.
     float panel = 0.78 + 0.40 * (0.5 + 0.5 * fbm(p * 1.7 + 12.0, 2, 2.0, 0.5));
-    vec3 pigment = uTint * (0.30 + 0.18 * grime) * panel;
+    vec3 pigment = uTint * (0.42 + 0.22 * grime) * panel;
     vec3 enamel = mix(steel * 0.52, pigment, uTintAmt);
     aAlb = mix(steel, enamel, paint);
 
@@ -350,23 +374,28 @@ const S_GLSL = {
     // normal map, so they must not print themselves into the albedo.
     aAlb = mix(uDark, aAlb, smoothstep(-0.95, -0.22, ah));
 
-    // The lacquer coat is a dielectric. Leaving it metallic is what turns a
-    // tinted panel back into chrome.
-    aMetal = uMetal * (1.0 - 0.90 * paint);
+    // Lacquer over steel is a thin coat, not a repaint. Taking metalness all
+    // the way down (this was 1.0 - 0.90 * paint) turns the panel into painted
+    // board: it stops sampling the environment, loses its grazing rolloff, and
+    // the class colour arrives as a flat diffuse patch. Dropping it only part
+    // of the way keeps a pigmented specular — coloured satin metal, which is
+    // what liveried plate actually looks like — while still being far enough
+    // off 1.0 that the panel cannot come back as tinted chrome.
+    aMetal = uMetal * (1.0 - 0.55 * paint);
 
-    // Satin, hand-finished plate. The tier's 0.28 base is a showroom polish
-    // under this lighting rig; forged steel wants to sit nearer 0.40 so the
-    // key's specular lobe spreads instead of clipping to a white disc, and the
-    // lacquer sits a little flatter still.
-    // High enough that a 95%-metal facet does not mirror the rig. The set is
-    // flat-shaded low-poly, so a sharp environment reflection makes every facet
-    // swing between the warm key and the cool rim and the panels read as a
-    // checker; blurring the reflection pulls neighbouring facets back together.
-    float baseRough = clamp(uRough + 0.22, 0.04, 1.0);
+    // Satin, hand-finished plate: forged steel, not a showroom polish and not
+    // a casting. The +0.22 that used to sit here was there to blur the
+    // environment reflection across a *flat-shaded* set, where a sharp
+    // reflection made neighbouring facets swing between the warm key and the
+    // cool rim. character/armor.js now builds plate with angle-limited crease
+    // normals (crease: 64), so the torso is a smooth surface and that reason
+    // is gone — what the floor does now is make a metal that cannot reflect
+    // anything, which is the whole "flat matte card" read.
+    float baseRough = clamp(uRough + 0.10, 0.04, 1.0);
     aRough = baseRough
-           + 0.17 * (1.0 - smoothstep(-0.70, -0.05, ah))
+           + 0.15 * (1.0 - smoothstep(-0.70, -0.05, ah))
            + 0.12 * (grime - 0.5)
-           + 0.15 * paint;
+           + 0.04 * paint;
     aAo = 0.40 + 0.60 * smoothstep(-1.0, -0.05, ah);
   `,
 
@@ -579,6 +608,7 @@ uniform vec3 uArmorTrimColor;
 uniform vec3 uArmorKeyDir;
 uniform float uArmorWear;
 uniform float uArmorRelief;
+uniform float uArmorGrime;
 uniform float uArmorTrimLo;
 uniform float uArmorTrimHi;
 uniform float uArmorEdgeLo;
@@ -666,7 +696,14 @@ roughnessFactor = mix(roughnessFactor, uArmorBareRough, armorWear);
 metalnessFactor = mix(metalnessFactor, uArmorBareMetal, armorWear);
 
 // Cavities and recessed relief collect grime and go matte.
-float armorGrime = clamp(
+//
+// Scaled per tier. Measured on plate, the flow map's wear alpha sits on its
+// 0.10 floor across every planished dent, scratch and pit — about 40% of the
+// texels — so this pass was darkening and matting 40% of the breastplate. On
+// cloth or leather that is right; on steel it is most of the reason the tier
+// had no value range. uArmorGrime is 1.0 on the soft tiers (unchanged) and
+// well under half on plate.
+float armorGrime = uArmorGrime * clamp(
   armorCavity + uArmorRelief * (1.0 - smoothstep(0.05, 0.50, armorBreak)), 0.0, 1.0);
 diffuseColor.rgb *= mix(1.0, 0.62, armorGrime * 0.75);
 roughnessFactor = min(1.0, roughnessFactor + 0.22 * armorGrime);
@@ -741,7 +778,7 @@ vec3 outgoingLight = totalDiffuse + totalSpecular + totalEmissiveRadiance;
   // past the 0.95 linear bloom threshold and clipped to white in broad sheets
   // rather than reading as a brushed glint.
   vec3 armorGlint = mix(uArmorTint, vec3(1.0), 0.55) * (0.30 + 0.55 * diffuseColor.rgb);
-  outgoingLight += armorGlint * min(armorStreak * armorAnisoAmt, 0.55);
+  outgoingLight += armorGlint * min(armorStreak * armorAnisoAmt, 0.30);
 }
 `;
 
@@ -781,6 +818,7 @@ export function createArmorMaterial(ctx, params = {}) {
     uArmorKeyDir: { value: new THREE.Vector3(-0.45, 0.78, 0.44).normalize() },
     uArmorWear: { value: TIER_PROPS.plate.wear },
     uArmorRelief: { value: TIER_ART.plate.relief },
+    uArmorGrime: { value: TIER_ART.plate.grime },
     uArmorTrimLo: { value: 0.68 },
     uArmorTrimHi: { value: 0.97 },
     uArmorEdgeLo: { value: TIER_ART.plate.edgeLo },
@@ -952,9 +990,20 @@ export function createArmorMaterial(ctx, params = {}) {
     material.normalScale.set(art.normalScale, art.normalScale);
     material.aoMapIntensity = art.aoIntensity;
     material.anisotropy = art.aniso;
-    // Held under 1.0. The IBL plus a 3.3 key and a 2.9 rim already saturate a
-    // metal; boosting the env on top of that is what pushed plate to chrome.
-    material.envMapIntensity = 0.62 + 0.20 * props.metalness;
+    // A metal has no diffuse term: the environment is the *only* thing that
+    // gives it a dark-to-bright gradient across a curved form, and the only
+    // thing that makes it pick up the room. gfx/lighting.js bakes a genuine
+    // HDR equirect (a dusk stone hall: ~0.05 linear stone against a blazing
+    // shuttered window at >20) and PMREMs it, so there is real contrast there
+    // to reflect — but at 0.81 the metal tiers were sampling it too faintly to
+    // resolve any of it, which is half of why plate read as matte card.
+    //
+    // The boost is gated hard on metalness so it lands on plate, barely
+    // touches mail, and leaves leather (0.65) and cloth (0.63) exactly where
+    // they were — those tiers are dielectrics with a real diffuse term and do
+    // not need it. Plate lands at ~1.15.
+    material.envMapIntensity = 0.62 + 0.20 * props.metalness
+      + 0.34 * THREE.MathUtils.smoothstep(props.metalness, 0.80, 0.95);
     material.sheen = 0.02 + props.clothMix * 0.20;
     material.sheenColor.set(tintHex);
 
@@ -966,6 +1015,7 @@ export function createArmorMaterial(ctx, params = {}) {
 
     U.uArmorWear.value = props.wear;
     U.uArmorRelief.value = art.relief;
+    U.uArmorGrime.value = art.grime;
     U.uArmorEdgeLo.value = art.edgeLo;
     U.uArmorEdgeHi.value = art.edgeHi;
     U.uArmorBareRough.value = art.bareRough;

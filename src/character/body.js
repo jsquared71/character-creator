@@ -437,6 +437,13 @@ const FACE_VARIANTS = [
 ];
 
 /**
+ * Vertical semi-axis of the skull, in head radii. Shared with the torso
+ * skeleton below, which has to know how tall the head is before `headParams`
+ * has run in order to leave room for it.
+ */
+const SKULL_RY = 1.055;
+
+/**
  * The facial layout.
  *
  * Two different units are in play and mixing them up is the single easiest way
@@ -475,9 +482,16 @@ function headParams(F, faceIndex, headR, gaunt) {
     // A skull is much taller and deeper than it is wide. The old 0.92/1.14/1.00
     // ellipsoid was within 25% of a sphere on every axis, which is most of why
     // the head read as an egg before a single feature was carved into it.
-    rx: headR * 0.700,
-    ry: headR * 1.020 * fv.skullH,
-    rz: headR * 0.880,
+    //
+    // The current numbers are the ADULT ratios: a 232 mm-tall, 152 mm-wide,
+    // 197 mm-deep head is 1.53 tall/wide and only 0.85 deep/tall. The previous
+    // 0.700/1.020/0.880 came out at 1.40 tall/wide and 0.96 deep/tall — i.e. a
+    // rounder, deeper, relatively wider braincase, which is the *infant*
+    // proportion and is half of why the face read as a doll however well the
+    // features themselves were carved.
+    rx: headR * 0.682,
+    ry: headR * SKULL_RY * fv.skullH,
+    rz: headR * 0.852,
 
     jaw: F.jaw * fv.jaw,
     // Everyone gets a real supraorbital ridge: `F.brow` is 0 for Human, and a
@@ -490,11 +504,23 @@ function headParams(F, faceIndex, headR, gaunt) {
 
     eyeY,
     browY: eyeY + 0.125,
-    eyeX: (0.315 + 0.075 * snout) * fv.eyeSpread,   // R units, from the midline
+    // Interocular distance. The canon is "one eye-width between the eyes": the
+    // aperture is 2 * eyeR = 0.244 R across, so the centres want to sit about
+    // 0.244 R either side of the midline, not 0.315. At 0.315 the gap was 1.6
+    // eye-widths and the eyes sat out over the temples — the single loudest
+    // infantile/doll cue in a front-on close-up. Muzzled races keep the lateral
+    // spread, because a bovine skull really does carry its eyes on the sides.
+    eyeX: (0.252 + 0.105 * snout) * fv.eyeSpread,   // R units, from the midline
     eyeTilt: fv.eyeTilt,
     eyeSize: fv.eyeSize,
-    eyeR: headR * 0.122 * fv.eyeSize,
-    eyeSink: headR * 0.055 * fv.eyeSize,
+    eyeR: headR * 0.132 * fv.eyeSize,
+    // How far the ball sits behind the floor of the orbit. It has to be deep
+    // enough that the lid crescents (which stand +0.068 R / +0.052 R proud of
+    // an orbit sunk 0.100 R) pass IN FRONT of the sphere's silhouette at the
+    // top and bottom of the aperture — at 0.055 they did not, and the eye was a
+    // bead glued to the skin — and no deeper, or the aperture falls into a pit
+    // and the whole eye goes to shadow at hero distance.
+    eyeSink: headR * 0.074 * fv.eyeSize,
 
     flat,
     muzzle,
@@ -566,14 +592,18 @@ function headSurface(P, theta, phi) {
   // The cranium is a rounded box, not the top of an ellipsoid. A skull holds
   // most of its width up to two thirds of its height and only then domes over;
   // letting sin(phi) do the work gives the pointed egg this module started as.
-  const boxy = Math.pow(Math.max(sp, 0.24), -0.42);
+  // The exponent is deliberately gentler than it was: at -0.42 with a 0.24
+  // floor the vault flared 82% wide at the crown, which is a toddler's
+  // braincase. -0.33 off a 0.30 floor still squares the parietals off but
+  // keeps the vault under the temples where an adult carries it.
+  const boxy = Math.pow(Math.max(sp, 0.30), -0.33);
   const dome = smoothstep(0.02, 0.55, uy);
   x *= lerp(1, boxy, dome);
   z *= lerp(1, boxy, dome * 0.75);
 
-  x *= 1 + 0.07 * P.cranium * gauss(uy - 0.34, 0.32);               // parietal
-  z *= 1 + 0.12 * P.cranium * back * smoothstep(-0.30, 0.65, uy);   // occiput
-  x *= 1 - 0.065 * gauss(uy - 0.30, 0.14) * faceM;                  // temples
+  x *= 1 + 0.042 * P.cranium * gauss(uy - 0.34, 0.32);              // parietal
+  z *= 1 + 0.105 * P.cranium * back * smoothstep(-0.30, 0.65, uy);  // occiput
+  x *= 1 - 0.090 * gauss(uy - 0.30, 0.14) * faceM;                  // temples
   z *= 1 - 0.055 * faceM * smoothstep(0.10, 0.72, uy);              // flat forehead
 
   // The front of a skull is a flat plane running from the brow to the chin.
@@ -589,13 +619,18 @@ function headSurface(P, theta, phi) {
 
   // Mandible. It has to stay at least as wide as the throat under it or the
   // head reads as a light bulb sitting on a neck.
-  x *= 1 + 0.10 * P.jaw * gauss(uy - (P.chinY + 0.34), 0.20);
+  x *= 1 + 0.165 * P.jaw * gauss(uy - (P.chinY + 0.30), 0.17);
   // Two-stage taper: the mandible body keeps most of its width, and only the
   // chin narrows. A single ramp from the nose down gives a cone, which reads as
   // a pointed alien jaw however wide the cheekbones are.
-  const jawT = smoothstep(-0.34, -0.62, uy);
-  const chinT = smoothstep(-0.62, -0.95, uy);
-  x *= lerp(1, 0.86, jawT) * lerp(1, 0.55, chinT);
+  //
+  // The taper used to bottom out at 0.86 * 0.55 = 0.47 of the skull's width by
+  // chin height, which is a chin you could sharpen a pencil with. An adult male
+  // mandible drops nearly vertically off the gonion and only rounds in over the
+  // last centimetre, so the ramps start lower and take much less away.
+  const jawT = smoothstep(-0.40, -0.70, uy);
+  const chinT = smoothstep(-0.70, -0.99, uy);
+  x *= lerp(1, 0.93, jawT) * lerp(1, 0.58, chinT);
   z *= lerp(1, 0.74, chinT * back);
 
   /* ---- eye sockets --------------------------------------------------------*/
@@ -605,10 +640,14 @@ function headSurface(P, theta, phi) {
   const es = P.eyeSize;
   const eDx = ax - P.eyeX;
   const eDy = dY(uy, P.eyeY) - P.eyeTilt * eDx;
-  const orbit = blob2(eDx, eDy, 0.190 * es, 0.150 * es) * faceM;
-  z -= R * 0.095 * orbit;
-  z += R * 0.048 * blob2(eDx, eDy - 0.100 * es, 0.170 * es, 0.052 * es) * faceM; // upper lid
-  z += R * 0.036 * blob2(eDx, eDy + 0.095 * es, 0.160 * es, 0.046 * es) * faceM; // lower lid
+  const orbit = blob2(eDx, eDy, 0.170 * es, 0.145 * es) * faceM;
+  z -= R * 0.100 * orbit;
+  z += R * 0.068 * blob2(eDx, eDy - 0.094 * es, 0.152 * es, 0.052 * es) * faceM; // upper lid
+  z += R * 0.052 * blob2(eDx, eDy + 0.090 * es, 0.148 * es, 0.048 * es) * faceM; // lower lid
+  // The crease above the upper lid. Without a shadow line between lid and brow
+  // the eye has no socket, and an eye with no socket reads as a bead however
+  // deep the ball is set.
+  z -= R * 0.026 * blob2(eDx, eDy - 0.162 * es, 0.160 * es, 0.040 * es) * faceM;
 
   /* ---- brow ---------------------------------------------------------------*/
   const browArc = dY(uy, P.browY) + 0.10 * Math.pow(sat(ax / 0.62), 2);
@@ -626,8 +665,12 @@ function headSurface(P, theta, phi) {
   const holl = blob2(ax - 0.52, dY(uy, P.eyeY) + 0.50, 0.170, 0.150) * faceM;
   x -= R * 0.085 * P.hollow * holl * sgn;
   z -= R * 0.045 * P.hollow * holl;
-  const gonial = blob2(ax - 0.56, dY(uy, P.chinY) - 0.34, 0.200, 0.160) * smoothstep(-0.55, 0.25, uz);
-  x += R * 0.130 * Math.max(0, P.jaw - 0.40) * gonial * sgn;
+  // The angle of the jaw. This is the corner an adult male head turns at and a
+  // child's does not, so it carries most of the "squarer jaw" read on its own —
+  // it wants to be a visible corner in three-quarter view, not a suggestion.
+  const gonial = blob2(ax - 0.54, dY(uy, P.chinY) - 0.32, 0.215, 0.185) * smoothstep(-0.55, 0.25, uz);
+  x += R * 0.180 * Math.max(0, P.jaw - 0.40) * gonial * sgn;
+  z -= R * 0.030 * Math.max(0, P.jaw - 0.40) * gonial * back;   // ramus flat behind
 
   /* ---- nose ---------------------------------------------------------------*/
   if (P.flat > 0.01) {
@@ -651,8 +694,11 @@ function headSurface(P, theta, phi) {
     z -= R * 0.130 * f * nos;
     y -= R * 0.028 * f * nos;
 
-    // Philtrum.
-    z -= R * 0.042 * P.flat * blob2(ax, dY(uy, P.noseBaseY) + 0.080, 0.038, 0.055) * faceM;
+    // Philtrum: a groove with a ridge either side of it. The groove alone is
+    // invisible — what you actually see on a face is the pair of ridges casting
+    // into it, so both halves have to be there.
+    z -= R * 0.060 * P.flat * blob2(ax, dY(uy, P.noseBaseY) + 0.078, 0.034, 0.052) * faceM;
+    z += R * 0.026 * P.flat * blob2(ax - 0.055, dY(uy, P.noseBaseY) + 0.072, 0.026, 0.050) * faceM;
 
     // Nasolabial fold, from the wing of the nose down to the corner of the mouth.
     const nlT = sat((P.noseBaseY - uy) / Math.max(1e-3, P.noseBaseY - (P.mouthY - 0.03)));
@@ -685,13 +731,21 @@ function headSurface(P, theta, phi) {
     const mw = 0.185 * P.mouthW;
     const across = superG(ax, mw, 4) * faceM;
     const bow = dY(uy, P.mouthY) + 0.015 * Math.pow(sat(ax / mw), 2);
-    z += R * 0.072 * P.lip * gauss(bow - 0.058, 0.045) * across;   // upper lip
-    z += R * 0.080 * P.lip * gauss(bow + 0.065, 0.050) * across;   // lower lip
-    const line = gauss(bow, 0.026 + 0.014 * P.muzzle) * across;
-    z -= R * (0.100 + 0.055 * P.muzzle) * line;
+    // Lip VOLUME, not a lip-coloured stripe. The vermilion of a closed mouth
+    // stands 4-6 mm proud of the skin around it and the lower lip stands
+    // proudest; at the old amplitudes, spread over the old sigmas, the whole
+    // thing averaged out into the surrounding cheek and only the groove
+    // survived — which is exactly the "shallow horizontal line" read.
+    z += R * 0.104 * P.lip * gauss(bow - 0.054, 0.038) * across;   // upper lip
+    z += R * 0.120 * P.lip * gauss(bow + 0.060, 0.044) * across;   // lower lip
+    const line = gauss(bow, 0.021 + 0.014 * P.muzzle) * across;
+    z -= R * (0.130 + 0.055 * P.muzzle) * line;
     y -= R * 0.012 * line;
-    z -= R * 0.032 * blob2(ax - mw * 0.94, bow, 0.050, 0.036) * faceM;  // corners
-    z -= R * 0.070 * gauss(bow + 0.160, 0.050) * across;                // mentolabial
+    // The corners. A mouth that keeps its full lip volume all the way to the
+    // end of the slot is a beak; the volume has to die into a pit at each end,
+    // and that pit is what makes the mouth read as a mouth in profile.
+    z -= R * 0.078 * blob2(ax - mw * 0.90, bow, 0.056, 0.044) * faceM;
+    z -= R * 0.085 * gauss(bow + 0.150, 0.046) * across;                // mentolabial
   }
 
   /* ---- chin ---------------------------------------------------------------*/
@@ -1210,7 +1264,16 @@ export function buildBodyGeometry(build, features, opts = {}) {
 
   const H = B.height;
   const unit = H * 0.098;                       // torso radius unit
-  const headR = (H / 16) * B.headScale;         // canonical-8-heads radius
+  // Head radius. The figure is measured in HEAD HEIGHTS, not head radii, and
+  // the two are not interchangeable: a skull is 1.78 ry + a chin tall, i.e.
+  // about 2.02 R. Dividing the body height by 16 therefore produced an 8.3-head
+  // figure, not the 8 the old comment claimed and well short of the ~7.5 heads
+  // a heroic humanoid wants — which is why the head read small at hero framing
+  // however good the face was up close. H / 14.9 puts a baseline Human at 7.5
+  // head heights and leaves every per-race `headScale` multiplier working off
+  // that: Gnome 1.55 lands near 4.9 heads, Dwarf 1.22 near 6.2, Night Elf 0.92
+  // near 8.2.
+  const headR = (H / 14.9) * B.headScale;
   const hipY = H * B.legLength;                 // hip joint height
   const gaunt = sat((0.92 - B.armThick) / 0.28); // Undead-ness: knobby, hollow
   // How much muscle relief the limbs get. A gaunt race keeps the joints (which
@@ -1234,7 +1297,7 @@ export function buildBodyGeometry(build, features, opts = {}) {
 
   // --- torso / neck skeleton -------------------------------------------------
   const neckLen = Math.max(headR * 0.16, headR * 0.95 * B.neck);
-  const headCentreYNom = H - headR * 1.02;
+  const headCentreYNom = H - headR * SKULL_RY;
   const torsoLen = Math.max(H * 0.16, headCentreYNom - headR * 0.68 - neckLen - hipY);
 
   // Tangent angle away from vertical, integrated up the spine. The hunch is
